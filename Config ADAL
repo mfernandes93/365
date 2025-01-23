@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+  <appSettings>
+    <!-- 
+      Ajuste estes valores de acordo com as configurações 
+      do seu App Registration no Azure AD 
+    -->
+    <add key="TenantId" value="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+    <add key="ClientId" value="yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy" />
+    <add key="ClientSecret" value="DigiteAquiOClientSecret" />
+    <!-- Para ADAL, geralmente usamos o "resource" do Graph -->
+    <add key="GraphResourceId" value="https://graph.microsoft.com" />
+  </appSettings>
+  
+  <!-- Demais configurações do seu projeto -->
+
+</configuration>
