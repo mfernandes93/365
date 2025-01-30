@@ -1,0 +1,45 @@
+using System;
+using System.Configuration;
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+
+public static class GraphAuthHelper
+{
+    public static string GetToken()
+    {
+        // Lê qual ambiente está configurado no appSettings (Dev, Prod, etc.)
+        string environment = ConfigurationManager.AppSettings["Environment"] ?? "Dev";
+
+        // Monta as chaves específicas do ambiente
+        string tenantId = ConfigurationManager.AppSettings["TenantId_" + environment];
+        string clientId = ConfigurationManager.AppSettings["ClientId_" + environment];
+        string clientSecret = ConfigurationManager.AppSettings["ClientSecret_" + environment];
+        string resourceId = ConfigurationManager.AppSettings["GraphResourceId_" + environment];
+
+        // Valida se as chaves foram encontradas
+        if (string.IsNullOrEmpty(tenantId) ||
+            string.IsNullOrEmpty(clientId) ||
+            string.IsNullOrEmpty(clientSecret) ||
+            string.IsNullOrEmpty(resourceId))
+        {
+            throw new Exception($"Configurações de {environment} estão incompletas no App.config.");
+        }
+
+        // Monta a authority (URL de autenticação) com base no TenantId
+        string authority = $"https://login.microsoftonline.com/{tenantId}";
+
+        // Cria o objeto de contexto de autenticação
+        var authContext = new AuthenticationContext(authority);
+
+        // Credenciais do cliente (Client Credentials Flow)
+        var clientCredential = new ClientCredential(clientId, clientSecret);
+
+        // Solicita o token ao Azure AD (de forma síncrona, para simplificar)
+        var result = authContext.AcquireTokenAsync(resourceId, clientCredential).Result;
+
+        if (result == null)
+            throw new Exception("Falha ao obter token de acesso via ADAL.");
+
+        // Retorna apenas o valor do token
+        return result.AccessToken;
+    }
+}
