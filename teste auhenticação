@@ -1,0 +1,211 @@
+1. Classe GraphAuthHelper (para contexto)
+Supondo que você já tenha algo assim:
+
+
+csharp
+Copiar
+
+
+
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using System;
+using System.Configuration;
+
+public static class GraphAuthHelper
+{
+    public static string GetToken()
+    {
+        var environment = ConfigurationManager.AppSettings["Environment"] ?? "Dev";
+        var tenantId = ConfigurationManager.AppSettings["TenantId_" + environment];
+        var clientId = ConfigurationManager.AppSettings["ClientId_" + environment];
+        var clientSecret = ConfigurationManager.AppSettings["ClientSecret_" + environment];
+        var resourceId = ConfigurationManager.AppSettings["GraphResourceId_" + environment];
+
+        string authority = $"https://login.microsoftonline.com/{tenantId}";
+        var authContext = new AuthenticationContext(authority);
+        var credential = new ClientCredential(clientId, clientSecret);
+
+        var result = authContext.AcquireTokenAsync(resourceId, credential).Result;
+        if (result == null)
+            throw new Exception("Falha ao obter token de acesso.");
+
+        return result.AccessToken;
+    }
+}
+
+
+
+2. Criar o método TestarAutenticacao
+Você pode colocar esse método na mesma classe (GraphAuthHelper) ou em outra classe de testes. A ideia é obter o token e chamar a Graph API para obter informações do usuário:
+
+csharp
+Copiar
+
+
+
+
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using Newtonsoft.Json.Linq;
+
+public static class GraphTestHelper
+{
+    public static void TestarAutenticacao(string userEmail)
+    {
+        try
+        {
+            // 1) Obter o token via GraphAuthHelper
+            string token = GraphAuthHelper.GetToken();
+
+            // 2) Usar HttpClient para chamar a Graph API
+            using (var client = new HttpClient())
+            {
+                client.DefaultRequestHeaders.Authorization =
+                    new AuthenticationHeaderValue("Bearer", token);
+
+                // 3) Buscar informações do usuário pelo email principal
+                //    Exemplo de endpoint: /v1.0/users/{userEmail} 
+                //    (Isso retorna displayName, mail, id, userPrincipalName etc.)
+                string url = $"https://graph.microsoft.com/v1.0/users/{userEmail}";
+                
+                var response = client.GetAsync(url).Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Se não foi 2xx, lança exceção com o código de status
+                    throw new Exception($"Falha ao acessar Graph API: {response.StatusCode} - {response.ReasonPhrase}");
+                }
+
+                // 4) Ler o conteúdo JSON retornado
+                string json = response.Content.ReadAsStringAsync().Result;
+                JObject userObj = JObject.Parse(json);
+
+                // 5) Se deu certo, vamos exibir algumas informações
+                string displayName = (string)userObj["displayName"];
+                string mail = (string)userObj["mail"];
+                string userId = (string)userObj["id"];
+
+                Console.WriteLine("Autenticação e conexão ao Graph bem-sucedidas!");
+                Console.WriteLine($"Usuário: {displayName} - {mail} - ID: {userId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine("Erro ao testar autenticação: " + ex.Message);
+            // Lançar de novo se quiser tratar em outro lugar
+            throw;
+        }
+    }
+}
+
+
+
+
+
+
+Observações
+Endpoint: Neste exemplo, usamos GET /v1.0/users/{userEmail} para recuperar informações sobre um determinado usuário do Azure AD. Se você quiser validar especificamente o acesso à caixa de e-mail (Exchange Online), poderia também chamar GET /v1.0/users/{userEmail}/mailFolders para checar se você consegue ler as pastas de e-mail.
+Verificação: Se a chamada retornar 200 OK, significa que:
+O token foi gerado corretamente.
+As permissões (Mail.Read, User.Read, etc.) devem estar configuradas.
+Você tem acesso ao recurso Graph.
+Exceção: Se algo falhar, cai no bloco catch, e você terá detalhes do erro (por exemplo, 401 - Unauthorized se o token não for válido, ou 403 - Forbidden se não tiver permissão).
+3. Chamar TestarAutenticacao no seu Main ou em outro local
+Num Console Application, por exemplo:
+
+csharp
+Copiar
+
+
+
+
+
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        try
+        {
+            // Informe a conta de e-mail que deseja verificar
+            string userEmail = "caixa@empresa.com";
+            
+            Console.WriteLine("Testando autenticação e conexão ao Microsoft Graph...");
+            GraphTestHelper.TestarAutenticacao(userEmail);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Ocorreu um erro: {ex.Message}");
+        }
+
+        Console.WriteLine("Pressione ENTER para sair.");
+        Console.ReadLine();
+    }
+}
+
+
+
+
+
+
+
+
+
+Se você vir algo como:
+
+php
+Copiar
+Testando autenticação e conexão ao Microsoft Graph...
+Autenticação e conexão ao Graph bem-sucedidas!
+Usuário: <Nome do usuário> - <Email> - ID: <Guid>
+Pressione ENTER para sair.
+Significa que funcionou!
+
+Alternativa: Validar apenas o Token
+Se tudo o que você quer é testar se o token é obtido corretamente (sem necessariamente acessar a caixa de e-mail), pode criar um método mais simples que apenas chama GraphAuthHelper.GetToken() e imprime o token ou um substring dele:
+
+csharp
+Copiar
+public static void TestarToken()
+{
+    try
+    {
+        string token = GraphAuthHelper.GetToken();
+        Console.WriteLine("Token obtido com sucesso! Exemplo (primeiros 50 chars):");
+        Console.WriteLine(token.Substring(0, 50) + "...");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("Erro ao obter token: " + ex.Message);
+        throw;
+    }
+}
+
+
+
+
+
+
+
+
+
+Se esse método rodar sem exceção e imprimir um token, você já sabe que a autenticação (Client Credentials) está funcionando no Azure AD. Depois, para testar se você tem permissão de leitura de e-mails, basta chamar algum endpoint do Graph que liste ou leia pastas de e-mail.
+
+Conclusão
+Com esse método TestarAutenticacao, você consegue verificar rapidamente se:
+
+Está conseguindo obter o token via ADAL.
+Está conseguindo chamar o Microsoft Graph (no caso, endpoint do usuário ou das pastas de e-mail).
+Suas permissões e credenciais estão corretas.
+Caso receba erros, verifique:
+
+Client Secret correto e não expirado.
+Permissões (Mail.Read, etc.) concedidas em API Permissions no Azure Portal.
+Consentimento dado pelo admin (Grant admin consent).
+TenantID, ClientID sem trocas de ambiente Dev/Prod incorretas.
+Assim, você isola o teste de autenticação/conexão antes de partir para a lógica completa de leitura de e-mails e download de anexos.
+
+
+
+
+
