@@ -1,0 +1,64 @@
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using System;
+using System.Configuration;
+
+public static class GraphAuthHelper
+{
+    public static string GetToken()
+    {
+        // Você pode (opcionalmente) forçar TLS 1.2 aqui, se necessário:
+        // System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
+
+        try
+        {
+            // 1) Ler configs do App.config
+            string environment = ConfigurationManager.AppSettings["Environment"] ?? "Dev";
+            string tenantId = ConfigurationManager.AppSettings["TenantId_" + environment];
+            string clientId = ConfigurationManager.AppSettings["ClientId_" + environment];
+            string clientSecret = ConfigurationManager.AppSettings["ClientSecret_" + environment];
+            string resourceId = ConfigurationManager.AppSettings["GraphResourceId_" + environment];
+
+            // 2) Montar a authority e criar o AuthenticationContext
+            string authority = $"https://login.microsoftonline.com/{tenantId}";
+            var authContext = new AuthenticationContext(authority);
+
+            // 3) Criar credencial
+            var credential = new ClientCredential(clientId, clientSecret);
+
+            // 4) Obter token (chamada assíncrona que estamos usando de forma síncrona)
+            //    Se der erro, pode vir encapsulado em AggregateException
+            var result = authContext.AcquireTokenAsync(resourceId, credential).Result;
+
+            // 5) Verifica se deu certo
+            if (result == null)
+            {
+                throw new Exception("Falha ao obter token de acesso (result veio nulo).");
+            }
+
+            Console.WriteLine("Token obtido com sucesso.");
+            // Você pode imprimir parte do token para debug (mas cuidado em produção!)
+            // Console.WriteLine("Token (início): " + result.AccessToken.Substring(0, 30));
+
+            return result.AccessToken;
+        }
+        catch (AggregateException agex)
+        {
+            // A AcquireTokenAsync(...).Result pode lançar AggregateException
+            // Normalmente, a exceção real fica em agex.InnerExceptions[0]
+            foreach (var inner in agex.InnerExceptions)
+            {
+                Console.WriteLine("Erro interno (AggregateException): " + inner.Message);
+                // Se quiser, pode logar o stack trace:
+                // Console.WriteLine(inner.StackTrace);
+            }
+            throw; // Relança para quem chamou tratar ou encerrar
+        }
+        catch (Exception ex)
+        {
+            // Captura outros tipos de exceções
+            Console.WriteLine("Erro ao obter token: " + ex.Message);
+            // Console.WriteLine(ex.StackTrace); // Se precisar do stack trace
+            throw; // Relança
+        }
+    }
+}
