@@ -1,0 +1,17 @@
+private void btnTestarAuth_Click(object sender, EventArgs e)
+{
+    try
+    {
+        // Se quiser deixar dinâmico, pode buscar o e-mail de um TextBox
+        string userEmail = "caixa@empresa.com"; 
+        GraphTestHelper.TestarAutenticacao(userEmail);
+
+        MessageBox.Show("Autenticação bem-sucedida!", 
+            "Info", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show("Erro ao testar autenticação: " + ex.Message, 
+            "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
