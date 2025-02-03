@@ -1,0 +1,39 @@
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using System;
+using System.Configuration;
+
+public static class GraphAuthHelper
+{
+    public static string GetToken()
+    {
+        // Forçar TLS 1.2
+        System.Net.ServicePointManager.SecurityProtocol = 
+            System.Net.SecurityProtocolType.Tls12;
+
+        // Ler ambiente (Dev/Prod)
+        string environment = ConfigurationManager.AppSettings["Environment"] ?? "Dev";
+
+        // Ler TenantId, ClientId etc. (ajustar conforme seu App.config)
+        string tenantId = ConfigurationManager.AppSettings["TenantId_" + environment];
+        string clientId = ConfigurationManager.AppSettings["ClientId_" + environment];
+        string clientSecret = ConfigurationManager.AppSettings["ClientSecret_" + environment];
+        string resource = ConfigurationManager.AppSettings["GraphResourceId_" + environment];
+
+        // Monta authority
+        string authority = $"https://login.microsoftonline.com/{tenantId}";
+
+        // Cria AuthenticationContext
+        var authContext = new AuthenticationContext(authority);
+        var credential = new ClientCredential(clientId, clientSecret);
+
+        // Obtém token (sincrono para exemplo)
+        var result = authContext.AcquireTokenAsync(resource, credential).Result;
+
+        if (result == null)
+        {
+            throw new Exception("Falha ao obter token de acesso via ADAL.");
+        }
+
+        return result.AccessToken;
+    }
+}
