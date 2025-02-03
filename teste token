@@ -1,0 +1,26 @@
+    try
+    {
+        // Tenta obter o token
+        string token = GraphAuthHelper.GetToken();
+
+        // Se deu certo, mostra os primeiros caracteres só para exemplificar
+        // (pois o token é longo e sensível)
+        string tokenPreview = token.Length > 50 ? token.Substring(0, 50) + "..." : token;
+
+        MessageBox.Show(
+            $"Token obtido com sucesso!\n\nInício do Token:\n{tokenPreview}",
+            "Autenticação OK",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information
+        );
+    }
+    catch (Exception ex)
+    {
+        // Se algo der errado, exibe o erro
+        MessageBox.Show(
+            $"Erro ao obter token: {ex.Message}",
+            "Erro",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error
+        );
+    }
