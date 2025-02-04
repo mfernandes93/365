@@ -1,0 +1,220 @@
+A seguir está um exemplo completo (em .NET Framework 4.5.2) de como implementar o fluxo Client Credentials do Azure AD (sem interação do usuário) para obter um Access Token. Uma vez com esse token, você pode chamá-lo de “Bearer Token” nas requisições à Microsoft Graph ou a outras APIs protegidas.
+
+A chave desse fluxo é fazer um POST ao endpoint /token do Azure AD, enviando:
+
+grant_type: client_credentials
+client_id: o Client ID (Application ID) da sua App Registration
+client_secret: o valor real do secret
+scope ou resource: no endpoint v2.0, usamos scope=<resource>/.default. Para Graph: scope=https://graph.microsoft.com/.default
+Ou, se ainda estiver usando endpoint v1 do AD, é resource=... em vez de scope, mas no v2.0 a forma recomendada é scope=…/.default.
+1. Estrutura do App.config
+Você pode manter no App.config (ou Web.config, se for ASP.NET) as informações:
+
+xml
+Copiar
+Editar
+<configuration>
+  <appSettings>
+    <!-- Tenant ID da sua org -->
+    <add key="TenantId" value="591669a0-183f-49a5-98f4-9aa0d0b63d81" />
+
+    <!-- Client ID (Application ID) -->
+    <add key="ClientId" value="38bfb203-ff4d-482f-a964-29d9bece14b0" />
+
+    <!-- Valor real do secret (pegue do Vault ou outra forma) -->
+    <add key="ClientSecret" value="S0m3~Sup3rSecret" />
+
+    <!-- Escopo (v2.0). Se quiser Graph, use: -->
+    <add key="Scope" value="https://graph.microsoft.com/.default" />
+
+    <!-- Ou se estiver fazendo para outro recurso, ex: "api://..." -->
+  </appSettings>
+</configuration>
+Se você está pegando o secret de um Vault, basta garantir que em runtime esse valor apareça aqui ou em uma variável de ambiente.
+
+2. Classe para obter o Token (Client Credentials)
+Crie, por exemplo, AuthHelper.cs no seu projeto:
+
+csharp
+Copiar
+Editar
+using System;
+using System.Configuration;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Text;
+using System.Threading.Tasks;
+
+public static class AuthHelper
+{
+    public static async Task<string> AcquireTokenClientCredentialsAsync()
+    {
+        // (1) Ler configs
+        string tenantId     = ConfigurationManager.AppSettings["TenantId"];
+        string clientId     = ConfigurationManager.AppSettings["ClientId"];
+        string clientSecret = ConfigurationManager.AppSettings["ClientSecret"];
+        string scope        = ConfigurationManager.AppSettings["Scope"]; 
+        // Ex: "https://graph.microsoft.com/.default"
+
+        // (2) Montar a URL do endpoint de token (v2.0)
+        //     https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token
+        string tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
+
+        // (3) Montar o corpo (form-urlencoded)
+        // grant_type=client_credentials
+        // client_id=...
+        // client_secret=...
+        // scope=.../.default
+        var bodyParams = new []
+        {
+            new KeyValuePair<string,string>("grant_type", "client_credentials"),
+            new KeyValuePair<string,string>("client_id", clientId),
+            new KeyValuePair<string,string>("client_secret", clientSecret),
+            new KeyValuePair<string,string>("scope", scope)
+        };
+
+        using (var client = new HttpClient())
+        {
+            // Se precisar TLS 1.2 em .NET 4.5.2:
+            System.Net.ServicePointManager.SecurityProtocol = 
+                System.Net.SecurityProtocolType.Tls12;
+
+            // Montar conteúdo
+            using (var content = new FormUrlEncodedContent(bodyParams))
+            {
+                // (4) POST ao endpoint
+                var response = await client.PostAsync(tokenEndpoint, content);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    string errorBody = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Falha ao obter token (status {response.StatusCode}): {errorBody}");
+                }
+
+                // (5) Ler a resposta JSON
+                var json = await response.Content.ReadAsStringAsync();
+                /*
+                Resposta típica:
+                {
+                  "token_type": "Bearer",
+                  "expires_in": 3599,
+                  "ext_expires_in": 3599,
+                  "access_token": "eyJ0eX..."
+                }
+                */
+
+                // Você pode usar Newtonsoft.Json ou System.Text.Json (se disponível)
+                // Aqui faço um parse simples com Newtonsoft:
+                dynamic obj = Newtonsoft.Json.JsonConvert.DeserializeObject(json);
+                string accessToken = obj.access_token;
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    throw new Exception("Não foi possível encontrar 'access_token' na resposta do Azure AD.");
+                }
+
+                return accessToken;
+            }
+        }
+    }
+}
+Notas:
+
+Em .NET 4.5.2, você precisa da Async library e do HttpClient. Verifique se o Microsoft.Bcl.Async e System.Net.Http estão corretamente referenciados.
+Se não quiser async/await, pode usar Task.Result, mas é recomendável async.
+Ajuste se for endpoint v1 (usando resource= em vez de scope=). Mas para v2.0, “scope” + “/.default” é o padrão.
+3. Uso no seu código para chamar a API
+Exemplo de um método que chama a Microsoft Graph (somente GET) depois de obter o token:
+
+csharp
+Copiar
+Editar
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
+
+public static class GraphClient
+{
+    public static async Task TestListUsersAsync()
+    {
+        // 1) Obter token via client credentials
+        string token = await AuthHelper.AcquireTokenClientCredentialsAsync();
+
+        // 2) Criar um HttpClient e setar o Authorization: Bearer
+        using (var client = new HttpClient())
+        {
+            client.DefaultRequestHeaders.Authorization = 
+                new AuthenticationHeaderValue("Bearer", token);
+
+            // 3) Chamar /v1.0/users (listar usuários, por exemplo)
+            string url = "https://graph.microsoft.com/v1.0/users";
+            var response = await client.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+            {
+                string errorBody = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Erro ao chamar Graph: {response.StatusCode} - {errorBody}");
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            Console.WriteLine("Retorno da Graph /users: " + json);
+        }
+    }
+}
+Depois, no seu Main() ou outro ponto de entrada, você chama:
+
+csharp
+Copiar
+Editar
+class Program
+{
+    static void Main(string[] args)
+    {
+        try
+        {
+            // Como é async, podemos usar .GetAwaiter().GetResult() aqui
+            GraphClient.TestListUsersAsync().GetAwaiter().GetResult();
+            // Agora deve listar os usuários via Graph
+        }
+        catch(Exception ex)
+        {
+            Console.WriteLine("Erro: " + ex.Message);
+        }
+
+        Console.WriteLine("Concluído. Pressione ENTER.");
+        Console.ReadLine();
+    }
+}
+4. Resumo do Fluxo Client Credentials (v2.0)
+POST no endpoint:
+
+bash
+Copiar
+Editar
+https://login.microsoftonline.com/<tenantId>/oauth2/v2.0/token
+com body:
+
+grant_type=client_credentials
+client_id=<clientId>
+client_secret=<secret>
+scope=<resource>/.default (para Graph: https://graph.microsoft.com/.default)
+Recebe em JSON: "access_token", "token_type", "expires_in", etc.
+
+Usa esse access_token no cabeçalho HTTP: Authorization: Bearer <token>.
+
+5. Verifique as Permissões (Application)
+No Azure Portal -> App registrations -> [sua App], em API Permissions, é preciso ter as permissões adequadas no modo Application (por exemplo, “User.Read.All” e “Mail.Read” no Microsoft Graph). E o Global Admin deve ter clicado em “Grant admin consent” para essas permissões.
+
+Se não tiver, você poderá receber 403 Forbidden ao chamar endpoints do Graph que exigem essas permissões.
+
+6. Diferença se estivesse no endpoint v1
+Se usar endpoint v1 (/oauth2/token em vez de /oauth2/v2.0/token), você troca scope=... por resource=.... Exemplo:
+csharp
+Copiar
+Editar
+new KeyValuePair<string,string>("resource", "https://graph.microsoft.com"),
+O resto é muito parecido, mas a Microsoft recomenda usar o v2.0 se possível.
+Conclusão
+Esse é o fluxo (B) Client Credentials completo: sem interação do usuário, apenas client_id e client_secret.
+Funciona em .NET 4.5.2 usando HttpClient.
+Lembre-se de habilitar TLS 1.2 se estiver recebendo erros de canal SSL, e de configurar as permissões (Application type) com admin consent no Azure Portal.
+Assim, você obtém o token e pode chamá-lo nas APIs do Azure.
