@@ -1,0 +1,348 @@
+Abaixo segue um passo a passo detalhado para você conectar seu sistema legado Windows Forms (.NET 4.5.2) ao HashiCorp Vault (onde está guardado o Client Secret do Azure AD), e depois obter um Access Token via Client Credentials. Também incluo um método de teste (chamado ao clicar num botão) para verificar se tudo está funcionando.
+
+Visão Geral do Cenário
+Você tem um HashiCorp Vault hospedado (chamado às vezes de “hashira vault” ou algo similar).
+
+Lá dentro está o Client Secret do Azure AD — ou seja, o valor que você normalmente usaria no “client_secret” para o fluxo de Client Credentials.
+O Vault expõe um endpoint HTTP, algo como https://<meu-vault>/v1/secret/data/poa/pro/aad/... para ler esse secret.
+Você tem uma aplicação Windows Forms em .NET 4.5.2.
+
+Ela precisa ler o valor do secret do Vault.
+Em seguida, usar esse valor para fazer o POST no endpoint de token do Azure AD: https://login.microsoftonline.com/<tenantId>/oauth2/v2.0/token, usando grant_type=client_credentials.
+Opcionalmente, você pode chamar a Microsoft Graph ou qualquer outra API do Azure que exija esse token.
+Teste de Conexão: Você quer um botão no formulário que, ao clicar, tente fazer todo o processo e informe se deu certo ou ocorreu algum erro.
+
+1. Estrutura de Configuração (App.config)
+No seu projeto Windows Forms (nome do projeto: MeuLegadoWinForms), você tem um App.config. Vamos colocar as chaves mínimas necessárias:
+
+xml
+Copiar
+Editar
+<?xml version="1.0" encoding="utf-8" ?>
+<configuration>
+  <appSettings>
+    <!-- URL base do seu Vault (ajuste conforme seu ambiente) -->
+    <add key="VaultBaseUrl" value="https://meu-vault-endereco:8200" />
+
+    <!-- Caminho do segredo. Exemplo de KV v2: secret/data/poa/pro/aad/... -->
+    <add key="VaultSecretPath" value="secret/data/poa/pro/aad/tb4-a1013/5dc55abb-4eb9-4eb4-98d8-72e9773b1968" />
+
+    <!-- Token para acessar o Vault (ou use AppRole). Aqui está simplificado. -->
+    <add key="VaultToken" value="SUA_TOKEN_DO_VAULT_AQUI" />
+    
+    <!-- Dados do Azure AD -->
+    <add key="TenantId" value="591669a0-183f-49a5-98f4-9aa0d0b63d81" />
+    <add key="ClientId" value="38bfb203-ff4d-482f-a964-29d9bece14b0" />
+    
+    <!-- Qual 'scope' ou recurso deseja acessar. Exemplo: Graph. -->
+    <add key="Scope" value="https://graph.microsoft.com/.default" />
+
+    <!-- TLS 1.2 (Se precisar forçar em .NET 4.5.2, veremos no código) -->
+  </appSettings>
+</configuration>
+Observação de segurança:
+
+Guardar o Vault Token em texto plano pode não ser ideal. Avalie se é melhor guardá-lo em outro local ou injetar via variável de ambiente. Mas, para este exemplo, mantemos no App.config para fins didáticos.
+2. Classe para Ler o Secret do Vault
+Crie um arquivo VaultHelper.cs. Ele usa HttpClient para:
+
+Ler VaultBaseUrl, VaultSecretPath, VaultToken do config.
+Fazer GET ou LIST no endpoint do Vault.
+Extrair o valor do Client Secret do JSON retornado.
+Exemplo (para Key/Value v2):
+
+csharp
+Copiar
+Editar
+using System;
+using System.Configuration;
+using System.Net.Http;
+using Newtonsoft.Json.Linq;
+
+public static class VaultHelper
+{
+    public static string GetAzureAdClientSecretFromVault()
+    {
+        // Lê configurações
+        string vaultUrl = ConfigurationManager.AppSettings["VaultBaseUrl"]; 
+        string secretPath = ConfigurationManager.AppSettings["VaultSecretPath"]; 
+        string vaultToken = ConfigurationManager.AppSettings["VaultToken"]; 
+
+        // Monta URL final do Vault
+        // Exemplo: https://meu-vault:8200/v1/secret/data/poa/pro/aad/...
+        string url = $"{vaultUrl}/v1/{secretPath}";
+
+        // Forçar TLS 1.2 em .NET 4.5.2 (se for necessário)
+        System.Net.ServicePointManager.SecurityProtocol = 
+            System.Net.SecurityProtocolType.Tls12;
+
+        using (var client = new HttpClient())
+        {
+            // Cabeçalho com o token do Vault
+            client.DefaultRequestHeaders.Add("X-Vault-Token", vaultToken);
+
+            // Faz a requisição GET
+            var response = client.GetAsync(url).Result;
+            if (!response.IsSuccessStatusCode)
+            {
+                string error = response.Content.ReadAsStringAsync().Result;
+                throw new Exception($"Erro ao acessar Vault: {response.StatusCode} - {error}");
+            }
+
+            // Lê JSON
+            string json = response.Content.ReadAsStringAsync().Result;
+            // Geralmente, para KV v2, vem algo como:
+            // { "request_id": "...", "data": { "data": { "ClientSecret": "..."} } }
+            JObject obj = JObject.Parse(json);
+
+            // Depende de como armazenou. 
+            // Supondo que o campo no Vault se chama "ClientSecret"
+            // e estamos em KV v2 => obj["data"]["data"]["ClientSecret"]
+            JToken secretToken = obj["data"]["data"]["ClientSecret"];
+            if (secretToken == null)
+            {
+                // Talvez seja outro nome ou outra estrutura
+                throw new Exception("Não foi encontrado 'ClientSecret' no retorno do Vault.");
+            }
+
+            string clientSecretValue = secretToken.ToString();
+            return clientSecretValue;
+        }
+    }
+}
+Ajustes
+Se o nome do campo no Vault for diferente (ex.: "value", "secret", etc.), mude "ClientSecret" na extração.
+Se estiver usando KV v1 (em vez de v2), a estrutura JSON muda. Ajuste conforme o que o Vault retorna.
+3. Classe para Fazer Client Credentials no Azure AD
+Crie AzureAdAuthHelper.cs. Nele:
+
+Lê TenantId, ClientId, Scope do config.
+
+Chama o VaultHelper.GetAzureAdClientSecretFromVault() para obter o valor do secret.
+
+Faz POST em https://login.microsoftonline.com/<tenantId>/oauth2/v2.0/token com:
+
+grant_type=client_credentials
+client_id=...
+client_secret=... (obtido do Vault)
+scope=.../.default (para Graph, etc.)
+Exemplo:
+
+csharp
+Copiar
+Editar
+using System;
+using System.Configuration;
+using System.Net.Http;
+using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
+
+public static class AzureAdAuthHelper
+{
+    public static string AcquireTokenViaClientCredentials()
+    {
+        // Lê config
+        string tenantId = ConfigurationManager.AppSettings["TenantId"];
+        string clientId = ConfigurationManager.AppSettings["ClientId"];
+        string scope    = ConfigurationManager.AppSettings["Scope"]; // ex: "https://graph.microsoft.com/.default"
+
+        // Pega o secret do Vault
+        string clientSecret = VaultHelper.GetAzureAdClientSecretFromVault();
+
+        // Monta endpoint
+        string tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
+
+        // Monta o corpo da requisição
+        var body = new FormUrlEncodedContent(new []
+        {
+            new KeyValuePair<string,string>("grant_type", "client_credentials"),
+            new KeyValuePair<string,string>("client_id", clientId),
+            new KeyValuePair<string,string>("client_secret", clientSecret),
+            new KeyValuePair<string,string>("scope", scope)
+        });
+
+        System.Net.ServicePointManager.SecurityProtocol = 
+            System.Net.SecurityProtocolType.Tls12;
+
+        // Faz o POST e lê resposta
+        using (var client = new HttpClient())
+        {
+            var response = client.PostAsync(tokenEndpoint, body).Result;
+            if (!response.IsSuccessStatusCode)
+            {
+                string error = response.Content.ReadAsStringAsync().Result;
+                throw new Exception($"Erro ao obter token (status {response.StatusCode}): {error}");
+            }
+
+            string json = response.Content.ReadAsStringAsync().Result;
+            JObject obj = JObject.Parse(json);
+
+            // Esperamos ter "access_token" no JSON
+            string accessToken = (string)obj["access_token"];
+            if (string.IsNullOrEmpty(accessToken))
+            {
+                throw new Exception("Access Token não encontrado na resposta do Azure AD.");
+            }
+
+            return accessToken;
+        }
+    }
+}
+4. Criando um Método de “Teste de Conexão” (Exemplo: Chamando Microsoft Graph)
+Para realmente testar o token, podemos chamar a Microsoft Graph e ver se recebemos resposta 200. Por exemplo, listar os usuários do tenant. Crie um método:
+
+csharp
+Copiar
+Editar
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using Newtonsoft.Json.Linq;
+
+public static class GraphTester
+{
+    public static string TestListUsers()
+    {
+        // 1) Pega o token via Client Credentials (usando AzureAdAuthHelper)
+        string token = AzureAdAuthHelper.AcquireTokenViaClientCredentials();
+
+        // 2) Chamar a Graph (GET /v1.0/users)
+        string url = "https://graph.microsoft.com/v1.0/users";
+
+        using (var client = new HttpClient())
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", token);
+
+            var response = client.GetAsync(url).Result;
+            if (!response.IsSuccessStatusCode)
+            {
+                string error = response.Content.ReadAsStringAsync().Result;
+                throw new Exception($"Erro ao chamar Graph /users: {response.StatusCode} - {error}");
+            }
+
+            string json = response.Content.ReadAsStringAsync().Result;
+            JObject obj = JObject.Parse(json);
+
+            // Pode retornar um objeto com "value", etc.
+            // Retornamos algo só para ver que funcionou
+            return "Retorno Graph /users => " + json;
+        }
+    }
+}
+5. Botão no Windows Forms para Testar
+Vamos supor que você tenha um Form chamado Form1 no seu projeto. Ele tem um botão chamado btnTestar que, ao clicar, vamos chamar o método GraphTester.TestListUsers() e exibir resultado ou erro.
+
+5.1. No Form1.Designer.cs
+Algo como:
+
+csharp
+Copiar
+Editar
+private System.Windows.Forms.Button btnTestar;
+
+private void InitializeComponent()
+{
+    this.btnTestar = new System.Windows.Forms.Button();
+    this.SuspendLayout();
+    // 
+    // btnTestar
+    // 
+    this.btnTestar.Location = new System.Drawing.Point(50, 30);
+    this.btnTestar.Name = "btnTestar";
+    this.btnTestar.Size = new System.Drawing.Size(100, 30);
+    this.btnTestar.TabIndex = 0;
+    this.btnTestar.Text = "Testar Conexão";
+    this.btnTestar.UseVisualStyleBackColor = true;
+    this.btnTestar.Click += new System.EventHandler(this.btnTestar_Click);
+    // 
+    // Form1
+    // 
+    this.ClientSize = new System.Drawing.Size(300, 200);
+    this.Controls.Add(this.btnTestar);
+    this.Name = "Form1";
+    this.Text = "Teste Vault + Azure AD";
+    this.ResumeLayout(false);
+}
+5.2. Evento de Clique btnTestar_Click
+No seu Form1.cs:
+
+csharp
+Copiar
+Editar
+private void btnTestar_Click(object sender, EventArgs e)
+{
+    try
+    {
+        // Chamamos o método que no final chama a Graph
+        string result = GraphTester.TestListUsers();
+
+        // Exibimos resultado
+        MessageBox.Show("Teste concluído com sucesso!\n\n" + result,
+            "OK", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    catch (Exception ex)
+    {
+        // Se algo der errado (Vault inacessível, secret inválido, 401 no Graph etc.)
+        MessageBox.Show("Erro ao testar conexão: " + ex.Message,
+            "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
+O que acontece ao clicar:
+TestListUsers() ->
+AcquireTokenViaClientCredentials() ->
+Lê configs do Azure AD
+Lê o Client Secret do Vault (GetAzureAdClientSecretFromVault())
+Faz POST no Azure AD para obter access_token
+Com o access_token, faz GET em https://graph.microsoft.com/v1.0/users.
+Se tudo der certo, retorna JSON com lista de usuários.
+Mostramos numa MessageBox.
+Se der erro (por exemplo, o Vault não responde, ou o secret está errado, ou as permissões no Azure AD faltam User.Read.All), o catch exibe a exceção na MessageBox.
+
+6. Conferindo Permissões e Políticas
+No HashiCorp Vault:
+
+Você precisa de uma policy que autorize read no path secret/data/poa/pro/aad/tb4-a1013/5dc55abb-4eb9-4eb4-98d8-72e9773b1968.
+O VaultToken que você está usando (no App.config) deve ter essa policy associada.
+No Azure AD (App Registration):
+
+Em API Permissions, você precisa de, por exemplo, User.Read.All (Application permission) se quiser listar usuários.
+Clique em “Grant admin consent” para a sua tenant.
+Caso contrário, chamando /v1.0/users pode resultar em 403 Forbidden.
+Verificar se a Graph exige TLS 1.2 e se é suportado. Usar:
+
+csharp
+Copiar
+Editar
+System.Net.ServicePointManager.SecurityProtocol = 
+    System.Net.SecurityProtocolType.Tls12;
+antes das requisições.
+
+Token de Vault: se expirar ou mudar, lembre-se de atualizar no App.config.
+
+Possíveis Erros e Soluções
+Erro 401 ao chamar Graph:
+Verifique se o token foi obtido corretamente. Talvez access_token seja nulo.
+Pode ser falta de permissão no Azure AD (não concedeu admin consent) ou secret errado.
+Erro 403 no Vault:
+O token do Vault não tem policy para “read” no path do secret.
+Erro 404 no Vault:
+O path secret/data/... não existe ou você está usando KV v1 ao invés de v2.
+AADSTS7000215 (Invalid client secret):
+O valor que você pegou do Vault não é o valor real do secret (pode ter outro nome, outro campo).
+Ou o secret expirou no Azure AD e você precisa gerar um novo.
+Resumo
+Armazene o Client Secret do Azure AD no HashiCorp Vault.
+No Windows Forms (.NET 4.5.2), crie:
+VaultHelper: Usa HttpClient + X-Vault-Token para ler o JSON e extrair o valor do secret.
+AzureAdAuthHelper: Faz o POST no endpoint do Azure AD, usando o secret vindo do Vault.
+GraphTester (opcional): Chama a Graph (ou outra API) para confirmar que o token funciona.
+No Form (btnTestar_Click), capture exceções e mostre MessageBox.
+Assim, você tem um processo “end-to-end”:
+
+Clica no botão,
+O app lê do Vault,
+Obtem token do Azure AD (fluxo Client Credentials),
+Chama a Graph,
+Exibe sucesso ou erro.
+Isso dispensa manter secrets em texto claro no seu projeto, pois o valor real está no Vault (embora ainda precisemos de um Vault Token ou mecanismo de auth), e é compatível com .NET 4.5.2 usando chamadas HTTP “manuais”.
