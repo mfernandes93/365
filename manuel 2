@@ -1,0 +1,175 @@
+Abaixo está um exemplo completo em .NET 4.5.2, demonstrando o Fluxo Manual de PKCE sem precisar configurar um servidor local (sem netsh). O usuário copiará o code da barra de endereço após o login e colará no console para trocá-lo pelo token.
+
+Observações:
+
+Este exemplo é um Console Application. Adapte para Windows Forms se preferir (o conceito é o mesmo).
+Você precisará adicionar referência a System.Net.Http (caso não tenha) e ao Newtonsoft.Json (por NuGet).
+Configure no Azure AD (App Registration) um redirect_uri (ex.: https://localhost/manualcallback) e use o mesmo no código.
+Código Completo (Program.cs)
+csharp
+Copiar
+Editar
+using System;
+using System.Net.Http;
+using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
+
+namespace ManualPkceFlowExample
+{
+    class Program
+    {
+        // Ajuste conforme seu ambiente:
+        static string TenantId    = "xxxxx-xxxxx-xxxxx-xxxxx";
+        static string ClientId    = "yyyyy-yyyyy-yyyyy-yyyyy";
+        static string RedirectUri = "https://localhost/manualcallback";
+        static string Scope       = "openid profile offline_access https://graph.microsoft.com/.default";
+
+        // Guardaremos o code_verifier gerado inicialmente, para usar depois:
+        static string codeVerifier;
+
+        static void Main(string[] args)
+        {
+            Console.WriteLine("=== Fluxo Manual PKCE (sem servidor local) ===");
+            
+            // 1) Gerar code_challenge e code_verifier
+            var (verifier, challenge) = GeneratePkcePair();
+            codeVerifier = verifier;
+
+            // 2) Montar a URL de autorização no Azure AD
+            // Ex.: "https://login.microsoftonline.com/<TenantId>/oauth2/v2.0/authorize"
+            string authorizeEndpoint = $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0/authorize";
+
+            string url = authorizeEndpoint
+                + "?client_id=" + Uri.EscapeDataString(ClientId)
+                + "&response_type=code"
+                + "&redirect_uri=" + Uri.EscapeDataString(RedirectUri)
+                + "&scope=" + Uri.EscapeDataString(Scope)
+                + "&code_challenge=" + Uri.EscapeDataString(challenge)
+                + "&code_challenge_method=S256";
+
+            Console.WriteLine("Abrindo Chrome para login...");
+            // Abre o Chrome (se estiver no PATH). Se preferir, use "explorer.exe <url>" ou outro browser.
+            Process.Start("chrome.exe", url);
+
+            Console.WriteLine("1) Faça login no navegador.");
+            Console.WriteLine($"2) Ao final, o Azure AD tentará redirecionar para {RedirectUri}, mas não existe servidor.");
+            Console.WriteLine("3) Você verá um erro de 'página não encontrada', mas a barra de endereço terá '?code=<...>'");
+            Console.WriteLine("4) Copie APENAS o valor de 'code' (sem '?code=') e cole aqui.");
+            Console.WriteLine();
+
+            Console.Write("Cole o 'code' aqui e tecle ENTER: ");
+            string code = Console.ReadLine();
+
+            try
+            {
+                // 3) Trocar o 'code' pelo token
+                string accessToken = ExchangeCodeForToken(code);
+
+                Console.WriteLine("Sucesso! Access Token obtido:");
+                // Mostrar apenas primeiros caracteres para não vazar o token inteiro
+                Console.WriteLine(accessToken.Substring(0, 50) + "...");
+            }
+            catch(Exception ex)
+            {
+                Console.WriteLine("Falha ao trocar code por token: " + ex.Message);
+            }
+
+            Console.WriteLine();
+            Console.WriteLine("Pressione ENTER para sair.");
+            Console.ReadLine();
+        }
+
+        // Gera code_verifier e code_challenge (PKCE)
+        static (string codeVerifier, string codeChallenge) GeneratePkcePair()
+        {
+            string codeVerifier = GenerateRandomString(50); // 50 chars (pode ser 43..128)
+            using (var sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
+                string codeChallenge = Base64UrlEncode(hash);
+                return (codeVerifier, codeChallenge);
+            }
+        }
+
+        // Gera string aleatória
+        static string GenerateRandomString(int length)
+        {
+            const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+            var rand = new Random();
+            char[] buffer = new char[length];
+            for (int i = 0; i < length; i++)
+                buffer[i] = chars[rand.Next(chars.Length)];
+            return new string(buffer);
+        }
+
+        // Base64Url Encode
+        static string Base64UrlEncode(byte[] arg)
+        {
+            string s = Convert.ToBase64String(arg)   // base64 normal
+                .TrimEnd('=')                        // remove padding
+                .Replace('+', '-')
+                .Replace('/', '_');
+            return s;
+        }
+
+        // Faz POST /token com code + code_verifier
+        static string ExchangeCodeForToken(string code)
+        {
+            string tokenEndpoint = $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0/token";
+
+            // Monta o form
+            var formFields = new List<KeyValuePair<string,string>>
+            {
+                new KeyValuePair<string,string>("grant_type","authorization_code"),
+                new KeyValuePair<string,string>("code", code),
+                new KeyValuePair<string,string>("redirect_uri", RedirectUri),
+                new KeyValuePair<string,string>("client_id", ClientId),
+                new KeyValuePair<string,string>("code_verifier", codeVerifier),
+                new KeyValuePair<string,string>("scope", Scope)
+            };
+
+            using (var client = new HttpClient())
+            {
+                // Em .NET 4.5.2, se necessário forçar TLS 1.2:
+                System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
+
+                var content = new FormUrlEncodedContent(formFields);
+                var response = client.PostAsync(tokenEndpoint, content).Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    string error = response.Content.ReadAsStringAsync().Result;
+                    throw new Exception($"HTTP {response.StatusCode}: {error}");
+                }
+
+                string json = response.Content.ReadAsStringAsync().Result;
+                JObject obj = JObject.Parse(json);
+
+                // Normalmente: "token_type", "expires_in", "access_token", "refresh_token"...
+                string accessToken = (string)obj["access_token"];
+                if (string.IsNullOrEmpty(accessToken))
+                    throw new Exception("access_token ausente na resposta.");
+
+                return accessToken;
+            }
+        }
+    }
+}
+Como Funciona
+Gera PKCE (code_verifier e code_challenge).
+Monta a URL de autorização com response_type=code, code_challenge, etc. e abre no Chrome.
+O usuário faz login; o Azure AD redireciona para https://localhost/manualcallback?code=..., mas dá erro de “página não encontrada” (não temos servidor).
+O usuário vê o code na barra de endereço e copia manualmente.
+O usuário cola o code no console.
+O código chama ExchangeCodeForToken(...), que faz POST no endpoint /token, passando code_verifier e code.
+Recebe o access_token (e possivelmente refresh_token) em JSON.
+Ajustes Possíveis
+Redirect Uri: mude https://localhost/manualcallback para qualquer outro que você tenha registrado no Azure AD.
+Scope: Se não precisar de openid profile offline_access, pode remover. Se for Client Credentials sem usuário, use grant_type=client_credentials e scope=https://graph.microsoft.com/.default (e não PKCE).
+Erro: Se der erro AADSTS70011 ou algo do tipo, cheque se o scope bate com as permissões e se a App Registration tem consentimento.
+Tenant: Ajuste TenantId para seu ID do Azure AD ou “common” se quiser multi-tenant.
+Gerar PKCE: Fica neste exemplo. Em produção, você poderia guardar codeVerifier em um local seguro (ex.: property da classe).
+Conclusão
+Esse é o Fluxo Manual PKCE completo, sem precisar de porta local registrada via netsh. O usuário copia o code da barra de endereço e cola na aplicação para obter o token. Isso funciona em .NET 4.5.2, usando HttpClient e Newtonsoft.Json, sem bibliotecas específicas do MSAL.
