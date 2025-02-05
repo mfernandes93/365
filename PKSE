@@ -1,0 +1,431 @@
+1. Visão Geral do Fluxo PKCE
+Gerar code_verifier (string aleatória e segura).
+Gerar code_challenge = Base64UrlEncode( SHA256( code_verifier ) ), método S256.
+Abrir o Chrome apontando para <authorization_endpoint>?client_id=...&response_type=code&redirect_uri=...&scope=...&code_challenge=<challenge>&code_challenge_method=S256
+O usuário faz login no Azure AD (ou outro IdP).
+O IdP faz redirect para redirect_uri?code=....
+Seu aplicativo captura esse code e faz um POST para o endpoint /token, enviando:
+grant_type=authorization_code
+code=<aquele_code>
+redirect_uri=<mesmo_redirect>
+client_id=<client_id>
+code_verifier=<aquele_gerado>
+scope=... (mesmo ou subset do que pediu antes)
+Você recebe um JSON com access_token (e possivelmente id_token, refresh_token).
+
+
+
+2. Geração do code_verifier e code_challenge
+Crie uma classe PkceHelper.cs:
+
+
+using System;
+using System.Security.Cryptography;
+using System.Text;
+
+public static class PkceHelper
+{
+    public static (string codeVerifier, string codeChallenge) GeneratePkcePair()
+    {
+        // 1) code_verifier: string aleatória de 43 a 128 caracteres
+        string codeVerifier = GenerateRandomString(50);
+
+        // 2) code_challenge = Base64UrlEncode( SHA256(code_verifier) )
+        using (var sha = SHA256.Create())
+        {
+            byte[] hashBytes = sha.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
+            string codeChallenge = Base64UrlEncode(hashBytes);
+            return (codeVerifier, codeChallenge);
+        }
+    }
+
+    private static string GenerateRandomString(int length)
+    {
+        const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+        var random = new Random();
+        char[] buffer = new char[length];
+        for (int i = 0; i < length; i++)
+        {
+            buffer[i] = chars[random.Next(chars.Length)];
+        }
+        return new string(buffer);
+    }
+
+    private static string Base64UrlEncode(byte[] arg)
+    {
+        string s = Convert.ToBase64String(arg) // base64 normal
+            .TrimEnd('=')                     // remove padding =
+            .Replace('+', '-')
+            .Replace('/', '_');
+        return s;
+    }
+}
+
+
+
+
+Essa classe gera (codeVerifier, codeChallenge).
+
+
+
+
+3. Abrindo o Chrome para o endpoint de autorização
+Supondo que você esteja usando Azure AD (mas poderia ser outro IdP com PKCE). Você precisaria do:
+
+client_id: da sua App Registration
+redirect_uri: cadastrado no Azure (ex.: http://localhost:12345/callback)
+scope: ex.: openid profile offline_access https://graph.microsoft.com/.default ou outro
+authorization_endpoint: https://login.microsoftonline.com/<tenantId>/oauth2/v2.0/authorize
+Exemplo de método
+
+using System;
+using System.Diagnostics;
+using System.Net;
+using System.Threading;
+
+public class PkceLoginFlow
+{
+    private string codeVerifier;
+
+    public void StartLogin()
+    {
+        var (verifier, challenge) = PkceHelper.GeneratePkcePair();
+        codeVerifier = verifier; // Guardar para usar depois ao trocar o code
+
+        string clientId = "SEU_CLIENT_ID";
+        string redirectUri = "http://localhost:12345/callback"; // Exemplo
+        string scope = "openid profile offline_access";
+        string tenantId = "SEU_TENANT_ID";
+        
+        // Endpoint do Azure AD v2
+        string authorizeEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize";
+
+        // Montar query string
+        string url = authorizeEndpoint
+            + "?client_id=" + Uri.EscapeDataString(clientId)
+            + "&response_type=code"
+            + "&redirect_uri=" + Uri.EscapeDataString(redirectUri)
+            + "&scope=" + Uri.EscapeDataString(scope)
+            + "&code_challenge=" + Uri.EscapeDataString(challenge)
+            + "&code_challenge_method=S256";
+
+        // Abrir com Google Chrome
+        // Obs.: se Chrome estiver no PATH, "chrome" basta. Senão indique caminho completo.
+        Process.Start("chrome.exe", url);
+
+        // Agora você precisa escutar o redirecionamento em http://localhost:12345/callback
+        // => ver prox. passo
+    }
+}
+
+
+
+
+4. Capturar o code no redirect_uri
+Você tem diversas estratégias:
+
+Servidor Web real (IIS, Kestrel, etc.) rodando em http://localhost:12345/callback.
+HttpListener embutido no seu app desktop.
+Manual: pedir ao usuário para “copiar o code da barra de endereço” e colar no app (não é prático, mas funciona).
+Exemplo usando HttpListener
+Em .NET 4.5.2, você pode usar HttpListener (mas precisa de privilégios para escutar portas, ou registrar no netsh). Exemplo simplificado:
+
+csharp
+
+
+
+public string WaitForCodeAndExchangeToken()
+{
+    // Exemplo: escuta http://localhost:12345/
+    HttpListener listener = new HttpListener();
+    listener.Prefixes.Add("http://localhost:12345/");
+    listener.Start();
+    Console.WriteLine("Aguardando callback do navegador...");
+
+    // Bloqueia até receber uma requisição
+    HttpListenerContext context = listener.GetContext();
+    // Ex.: GET /callback?code=xxx
+    string rawUrl = context.Request.RawUrl; // "/callback?code=..."
+    
+    // Extrair "code" da query
+    var query = context.Request.QueryString;
+    string code = query["code"]; // se "callback?code=..."
+
+    // Pode responder algo ao navegador
+    string responseString = "<html><body>Autenticação concluída. Você pode fechar esta janela.</body></html>";
+    byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseString);
+    context.Response.ContentLength64 = buffer.Length;
+    context.Response.OutputStream.Write(buffer, 0, buffer.Length);
+    context.Response.OutputStream.Close();
+
+    listener.Stop();
+    listener.Close();
+
+    // trocamos code pelo token
+    if (!string.IsNullOrEmpty(code))
+    {
+        string token = ExchangeCodeForToken(code); 
+        return token; 
+    }
+    else
+    {
+        throw new Exception("Code não encontrado na querystring.");
+    }
+}
+
+
+
+
+Esse método:
+
+Inicia um HttpListener na porta 12345.
+Espera a requisição do browser (/callback?code=...).
+Resgata o code.
+Fecha o listener.
+Chama ExchangeCodeForToken(...).
+Observação de Permissão
+Você possivelmente precisa de netsh http add urlacl url=http://+:12345/ user=...\User se estiver rodando sob Windows.
+Se preferir, use outra porta.
+
+
+
+
+
+5. Trocando o code pelo access_token (com PKCE)
+Agora, implementamos ExchangeCodeForToken. Precisamos:
+
+POST https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+Campos:
+plaintext
+Copiar
+Editar
+
+
+
+grant_type=authorization_code
+code=<o_code_pego>
+redirect_uri=http://localhost:12345/callback
+client_id=<seu_client_id>
+code_verifier=<aquele_guardado_no_início>
+scope=openid profile offline_access
+Lemos o JSON com access_token, id_token, etc.
+Exemplo:
+
+csharp
+Copiar
+Editar
+
+
+
+
+using System.Net.Http;
+using Newtonsoft.Json.Linq;
+
+private string codeVerifier; // guardado no StartLogin
+
+public string ExchangeCodeForToken(string code)
+{
+    string tenantId = "SEU_TENANT_ID";
+    string tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
+
+    string clientId = "SEU_CLIENT_ID";
+    string redirectUri = "http://localhost:12345/callback";
+    string scope = "openid profile offline_access"; // ou outro
+
+    // Montar form
+    var content = new FormUrlEncodedContent(new[]
+    {
+        new KeyValuePair<string,string>("grant_type","authorization_code"),
+        new KeyValuePair<string,string>("code", code),
+        new KeyValuePair<string,string>("redirect_uri", redirectUri),
+        new KeyValuePair<string,string>("client_id", clientId),
+        new KeyValuePair<string,string>("code_verifier", codeVerifier),
+        new KeyValuePair<string,string>("scope", scope)
+    });
+
+    using (var client = new HttpClient())
+    {
+        // Em .NET 4.5.2, talvez precise forçar TLS 1.2:
+        System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
+
+        var response = client.PostAsync(tokenEndpoint, content).Result;
+        if (!response.IsSuccessStatusCode)
+        {
+            string error = response.Content.ReadAsStringAsync().Result;
+            throw new Exception("Falha ao trocar code por token: " + error);
+        }
+
+        string json = response.Content.ReadAsStringAsync().Result;
+        JObject obj = JObject.Parse(json);
+
+        string accessToken = (string)obj["access_token"];
+        string idToken = (string)obj["id_token"];
+        string refreshToken = (string)obj["refresh_token"];
+
+        // Retornar o token ou armazenar
+        return accessToken;
+    }
+}
+
+
+
+
+
+6. Fluxo Completo (Exemplo Integrado)
+csharp
+Copiar
+Editar
+
+
+
+public class PkceFlowExample
+{
+    private HttpListener listener;
+    private string codeVerifier;
+
+    public void IniciarLoginComChrome()
+    {
+        // Gera PKCE
+        var (verifier, challenge) = PkceHelper.GeneratePkcePair();
+        codeVerifier = verifier;
+
+        // Monta URL
+        string clientId = "SEU_CLIENT_ID";
+        string tenantId = "SEU_TENANT_ID";
+        string redirectUri = "http://localhost:12345/callback";
+        string scope = "openid profile offline_access";
+
+        string authorizeEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize";
+        string url = authorizeEndpoint
+            + "?client_id=" + Uri.EscapeDataString(clientId)
+            + "&response_type=code"
+            + "&redirect_uri=" + Uri.EscapeDataString(redirectUri)
+            + "&scope=" + Uri.EscapeDataString(scope)
+            + "&code_challenge=" + Uri.EscapeDataString(challenge)
+            + "&code_challenge_method=S256";
+
+        // Inicia HttpListener
+        listener = new HttpListener();
+        listener.Prefixes.Add("http://localhost:12345/");
+        listener.Start();
+
+        // Abre Chrome
+        System.Diagnostics.Process.Start("chrome.exe", url);
+
+        // Espera callback
+        WaitForCode();
+    }
+
+    private void WaitForCode()
+    {
+        Console.WriteLine("Aguardando callback...");
+        var ctx = listener.GetContext(); 
+        // GET /callback?code=xxx
+        string code = ctx.Request.QueryString["code"];
+
+        // Resposta amigável
+        string responseString = "<html><body>Login concluído. Pode fechar esta aba.</body></html>";
+        byte[] buffer = System.Text.Encoding.UTF8.GetBytes(responseString);
+        ctx.Response.ContentLength64 = buffer.Length;
+        ctx.Response.OutputStream.Write(buffer, 0, buffer.Length);
+        ctx.Response.OutputStream.Close();
+
+        listener.Stop();
+
+        if (string.IsNullOrEmpty(code))
+        {
+            throw new Exception("Não recebemos o code.");
+        }
+
+        // Troca o code por token
+        string token = ExchangeCodeForToken(code);
+        Console.WriteLine("Access Token: " + token.Substring(0, 30) + "...");
+    }
+
+    private string ExchangeCodeForToken(string code)
+    {
+        string tenantId = "SEU_TENANT_ID";
+        string tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
+
+        string clientId = "SEU_CLIENT_ID";
+        string redirectUri = "http://localhost:12345/callback";
+        string scope = "openid profile offline_access";
+
+        var body = new FormUrlEncodedContent(new []
+        {
+            new KeyValuePair<string,string>("grant_type","authorization_code"),
+            new KeyValuePair<string,string>("code", code),
+            new KeyValuePair<string,string>("redirect_uri", redirectUri),
+            new KeyValuePair<string,string>("client_id", clientId),
+            new KeyValuePair<string,string>("code_verifier", codeVerifier),
+            new KeyValuePair<string,string>("scope", scope)
+        });
+
+        using (var client = new HttpClient())
+        {
+            var resp = client.PostAsync(tokenEndpoint, body).Result;
+            if (!resp.IsSuccessStatusCode)
+            {
+                string error = resp.Content.ReadAsStringAsync().Result;
+                throw new Exception("Erro ao obter token: " + error);
+            }
+            string json = resp.Content.ReadAsStringAsync().Result;
+            var obj = JObject.Parse(json);
+            string accessToken = (string)obj["access_token"];
+            return accessToken;
+        }
+    }
+}
+
+
+
+Observações
+Esse exemplo é didático e bloqueante (.Result) — em produção, considere async/await e tratar exceções com mais cuidado.
+Você também pode, ao invés de HttpListener, rodar um pequeno servidor local em outra thread.
+7. Usar num Botão do Windows Forms
+Se você tem um botão no seu form (em .NET 4.5.2) e quer disparar todo esse fluxo:
+
+csharp
+Copiar
+Editar
+
+
+
+
+private void btnPkceLogin_Click(object sender, EventArgs e)
+{
+    try
+    {
+        var flow = new PkceFlowExample();
+        flow.IniciarLoginComChrome();
+        MessageBox.Show("Fluxo de login concluído!");
+    }
+    catch(Exception ex)
+    {
+        MessageBox.Show("Erro no fluxo PKCE: " + ex.Message);
+    }
+}
+
+
+
+
+Quando o usuário clica:
+
+Abre o Chrome no /authorize.
+Usuário loga no Azure AD.
+Redireciona para http://localhost:12345/callback?code=....
+Seu HttpListener pega esse code, chama ExchangeCodeForToken(code).
+Recebe access_token e imprime no console (ou use como quiser).
+Conclusão
+Sim, é possível “refazer a autenticação PKCE com Google Chrome” abrindo o navegador do usuário para o endpoint de autorização. Você:
+
+Gera code_verifier e code_challenge.
+Lança Chrome na URL do OAuth2 /authorize.
+Escuta o callback (redirect_uri) com HttpListener.
+Troca o code pelo token usando code_verifier.
+Isso funciona em .NET 4.5.2, pois não depende de bibliotecas modernas (MSAL). Você só precisa:
+
+Interação do usuário.
+Uma forma de escutar a callback.
+Ter um client_id e redirect_uri registrado no Azure AD (ou outro IdP).
+Pronto! Você tem um fluxo Authorization Code + PKCE manual, usando Google Chrome como navegador.
