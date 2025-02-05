@@ -1,0 +1,208 @@
+A seguir, um exemplo completo de código, organizado em uma classe estática chamada ManualPkceFlow que implementa o fluxo manual de PKCE usando caixas de diálogo do Windows Forms (MessageBox e InputBox). Esse método pode ser chamado, por exemplo, a partir do clique de um botão no seu formulário.
+
+Você precisará ter as seguintes referências no seu projeto:
+
+System.Net.Http
+Newtonsoft.Json (via NuGet)
+Microsoft.VisualBasic (para usar Interaction.InputBox)
+Ajuste os valores de TenantId, ClientId, RedirectUri e Scope conforme a sua configuração no Azure AD.
+
+Código Completo da Classe ManualPkceFlow
+csharp
+Copiar
+
+
+
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
+using System.Windows.Forms;
+using Microsoft.VisualBasic; // Para Interaction.InputBox
+using Newtonsoft.Json.Linq;
+
+namespace MeuPkceWinForms
+{
+    public static class ManualPkceFlow
+    {
+        // Configure esses valores de acordo com a sua App Registration no Azure AD:
+        private static string TenantId = "591669a0-183f-49a5-98f4-9aa0d0b63d81";       
+        private static string ClientId = "38bfb203-ff4d-482f-a964-29d9bece14b0";          
+        private static string RedirectUri = "https://localhost/manualcallback";            
+        // Para fluxo interativo (com usuário), incluímos openid, profile e offline_access.
+        // O scope https://graph.microsoft.com/.default indica que queremos as permissões (API Permissions)
+        // concedidas à aplicação para a Microsoft Graph.
+        private static string Scope = "openid profile offline_access https://graph.microsoft.com/.default";
+
+        /// <summary>
+        /// Executa todo o fluxo manual de PKCE:
+        /// 1. Gera code_verifier e code_challenge.
+        /// 2. Monta e abre a URL de autorização no Chrome.
+        /// 3. Solicita que o usuário copie o valor do 'code' da URL.
+        /// 4. Troca o 'code' pelo access token.
+        /// </summary>
+        public static void RunFlow()
+        {
+            // 1) Gerar o par PKCE (code_verifier e code_challenge)
+            var (codeVerifier, codeChallenge) = GeneratePkcePair();
+
+            // 2) Montar a URL de autorização
+            string authorizeEndpoint = $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0/authorize";
+            string url = authorizeEndpoint
+                + "?client_id=" + Uri.EscapeDataString(ClientId)
+                + "&response_type=code"
+                + "&redirect_uri=" + Uri.EscapeDataString(RedirectUri)
+                + "&scope=" + Uri.EscapeDataString(Scope)
+                + "&code_challenge=" + Uri.EscapeDataString(codeChallenge)
+                + "&code_challenge_method=S256";
+
+            // Exibe instruções para o usuário
+            MessageBox.Show("O Chrome será aberto para que você faça login no Azure AD.\n" +
+                "Após o login, o Azure AD redirecionará para uma URL do tipo:\n" +
+                RedirectUri + "?code=... \n" +
+                "Como não há um servidor nesse endereço, você verá um erro de 'página não encontrada'.\n" +
+                "Copie o valor do parâmetro 'code' da barra de endereço e clique OK.", 
+                "Instruções", MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+            // 3) Abrir o navegador (Chrome) com a URL de autorização
+            try
+            {
+                System.Diagnostics.Process.Start("chrome.exe", url);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Erro ao abrir o Chrome: " + ex.Message, "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // 4) Solicitar que o usuário informe o 'code'
+            string code = Interaction.InputBox("Após concluir o login, copie o valor do parâmetro 'code' da barra de endereço do navegador e cole abaixo:", 
+                "Informe o Code", "");
+            if (string.IsNullOrEmpty(code))
+            {
+                MessageBox.Show("Nenhum code informado. Fluxo cancelado.", "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // 5) Trocar o 'code' pelo Access Token
+            try
+            {
+                string accessToken = ExchangeCodeForToken(code, codeVerifier);
+                MessageBox.Show("Access Token obtido com sucesso (parcial):\n" + 
+                    accessToken.Substring(0, Math.Min(50, accessToken.Length)) + "...", 
+                    "Sucesso", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Erro ao trocar o code por token:\n" + ex.Message, 
+                    "Erro", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        /// <summary>
+        /// Gera um par (code_verifier, code_challenge) para o fluxo PKCE.
+        /// </summary>
+        private static (string codeVerifier, string codeChallenge) GeneratePkcePair()
+        {
+            string verifier = GenerateRandomString(50);
+            using (var sha = SHA256.Create())
+            {
+                byte[] hash = sha.ComputeHash(Encoding.UTF8.GetBytes(verifier));
+                string challenge = Base64UrlEncode(hash);
+                return (verifier, challenge);
+            }
+        }
+
+        /// <summary>
+        /// Gera uma string aleatória com o tamanho especificado.
+        /// </summary>
+        private static string GenerateRandomString(int length)
+        {
+            const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+            var rand = new Random();
+            var sb = new StringBuilder();
+            for (int i = 0; i < length; i++)
+            {
+                sb.Append(chars[rand.Next(chars.Length)]);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Converte um array de bytes em uma string Base64 URL-safe.
+        /// </summary>
+        private static string Base64UrlEncode(byte[] bytes)
+        {
+            string base64 = Convert.ToBase64String(bytes);
+            return base64.TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        }
+
+        /// <summary>
+        /// Troca o código de autorização (code) pelo Access Token,
+        /// usando o code_verifier gerado inicialmente.
+        /// </summary>
+        private static string ExchangeCodeForToken(string code, string codeVerifier)
+        {
+            string tokenEndpoint = $"https://login.microsoftonline.com/{TenantId}/oauth2/v2.0/token";
+
+            var fields = new List<KeyValuePair<string, string>>()
+            {
+                new KeyValuePair<string, string>("grant_type", "authorization_code"),
+                new KeyValuePair<string, string>("code", code),
+                new KeyValuePair<string, string>("redirect_uri", RedirectUri),
+                new KeyValuePair<string, string>("client_id", ClientId),
+                new KeyValuePair<string, string>("code_verifier", codeVerifier),
+                new KeyValuePair<string, string>("scope", Scope)
+            };
+
+            // Forçar o uso de TLS 1.2 (necessário em .NET 4.5.2)
+            System.Net.ServicePointManager.SecurityProtocol = System.Net.SecurityProtocolType.Tls12;
+
+            using (var client = new HttpClient())
+            {
+                var content = new FormUrlEncodedContent(fields);
+                var response = client.PostAsync(tokenEndpoint, content).Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    string error = response.Content.ReadAsStringAsync().Result;
+                    throw new Exception($"Erro {response.StatusCode}: {error}");
+                }
+                string json = response.Content.ReadAsStringAsync().Result;
+                JObject obj = JObject.Parse(json);
+                string accessToken = (string)obj["access_token"];
+                if (string.IsNullOrEmpty(accessToken))
+                {
+                    throw new Exception("Resposta inválida: access_token ausente.");
+                }
+                return accessToken;
+            }
+        }
+    }
+}
+Como Integrar no Seu Projeto Windows Forms
+Adicione esse arquivo (ManualPkceFlow.cs) ao seu projeto.
+
+No seu formulário principal (por exemplo, Form1), crie um botão (por exemplo, btnFluxoManual).
+
+No evento de clique desse botão, chame o método:
+
+csharp
+Copiar
+private void btnFluxoManual_Click(object sender, EventArgs e)
+{
+    ManualPkceFlow.RunFlow();
+}
+Isso fará com que, ao clicar no botão, o fluxo seja iniciado:
+
+O navegador (Chrome) será aberto para que o usuário faça login.
+O usuário copiará manualmente o code da URL de redirecionamento.
+Um InputBox pedirá para inserir o code.
+O método troca o code pelo Access Token e exibe uma MessageBox com parte do token.
+Considerações Finais
+Redirect URI: Certifique-se de que o valor de RedirectUri esteja registrado na sua App Registration no Azure AD.
+Chrome: O código usa Process.Start("chrome.exe", url). Se o Chrome não estiver no PATH, use o caminho completo para o executável.
+Interação do Usuário: Como é um fluxo manual, o usuário precisará copiar e colar o code manualmente.
+.NET 4.5.2: Esse exemplo usa .Result para chamadas assíncronas, o que é comum em projetos legados. Em um cenário moderno, seria recomendável usar async/await.
+Este código agora está preparado para ser chamado via botão em um aplicativo Windows Forms.
