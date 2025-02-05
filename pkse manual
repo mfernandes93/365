@@ -1,0 +1,179 @@
+Fluxo Manual – Passo a Passo
+1. Registrar o redirect_uri no Azure AD
+Vá ao Azure Portal -> Azure Active Directory -> App registrations.
+Selecione sua aplicação (ou crie uma, se não tiver).
+Na aba Authentication, em “Redirect URIs”, adicione algo como:
+arduino
+Copiar
+Editar
+https://localhost/manualcallback
+ou
+arduino
+Copiar
+Editar
+https://minhapagina.com/manualcallback
+Pode ser um endpoint que não existe de fato. O importante é que seja a mesma URL que você informará no fluxo OAuth.
+
+Salve as alterações.
+Observação: Se for um “SPA” ou algo assim, selecione o tipo correspondente (Web, SPA, etc.). Mas, em geral, o que importa é que o redirect_uri seja exato e cadastrado.
+
+2. Gerar PKCE (code_challenge / code_verifier)
+Em .NET (ou outro lugar), você faz algo assim (exemplo de código para .NET 4.5.2):
+
+csharp
+Copiar
+Editar
+public static class PkceHelper
+{
+    public static (string codeVerifier, string codeChallenge) GeneratePkcePair()
+    {
+        string codeVerifier = GenerateRandomString(50);
+        using (var sha = System.Security.Cryptography.SHA256.Create())
+        {
+            byte[] hash = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(codeVerifier));
+            string codeChallenge = Base64UrlEncode(hash);
+            return (codeVerifier, codeChallenge);
+        }
+    }
+
+    private static string GenerateRandomString(int length)
+    {
+        const string chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~";
+        var rand = new Random();
+        char[] buffer = new char[length];
+        for(int i=0; i<length; i++)
+        {
+            buffer[i] = chars[rand.Next(chars.Length)];
+        }
+        return new string(buffer);
+    }
+
+    private static string Base64UrlEncode(byte[] arg)
+    {
+        string s = Convert.ToBase64String(arg)
+            .TrimEnd('=')
+            .Replace('+','-')
+            .Replace('/','_');
+        return s;
+    }
+}
+No seu código principal:
+
+csharp
+Copiar
+Editar
+var (verifier, challenge) = PkceHelper.GeneratePkcePair();
+// Guarde o 'verifier' em algum lugar (campo estático, variável global etc.).
+// 'challenge' será usado agora para montar a URL de autorização.
+3. Montar a URL de autorização e abrir no navegador
+Monte a URL que aponta para .../authorize do Azure AD, incluindo:
+
+client_id = ID da sua aplicação
+response_type= code
+redirect_uri = https://localhost/manualcallback (ou o que você cadastrou)
+scope = ex.: openid profile offline_access https://graph.microsoft.com/.default (se for Authorization Code Flow com Graph)
+code_challenge = o que você gerou
+code_challenge_method = S256
+Exemplo de construção (C# simplificado):
+
+csharp
+Copiar
+Editar
+string tenantId = "xxxxx-xxxxx-xxxxx-xxxxx";
+string clientId = "yyyyy-yyyyy-yyyyy-yyyyy";
+string redirectUri = "https://localhost/manualcallback";
+string scope = "openid profile offline_access https://graph.microsoft.com/.default";
+
+string authorizeEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/authorize";
+string url = authorizeEndpoint
+    + "?client_id=" + Uri.EscapeDataString(clientId)
+    + "&response_type=code"
+    + "&redirect_uri=" + Uri.EscapeDataString(redirectUri)
+    + "&scope=" + Uri.EscapeDataString(scope)
+    + "&code_challenge=" + Uri.EscapeDataString(challenge)
+    + "&code_challenge_method=S256";
+
+// Abre no Chrome, por exemplo:
+System.Diagnostics.Process.Start("chrome.exe", url);
+O que acontece
+Usuário clica no botão ou executa o código.
+Abre o Chrome com a tela de login no Azure AD.
+O usuário faz login.
+Ao término, o Azure AD redireciona para https://localhost/manualcallback?code=<O_CODE>&state=....
+Porém, como não existe um servidor de fato em localhost/manualcallback, o usuário vê uma página de erro (ex.: “Não foi possível encontrar o site”). Mas a barra de endereço do Chrome terá:
+
+arduino
+Copiar
+Editar
+https://localhost/manualcallback?code=0.ABCDEFGhijKlmnO...
+4. O usuário copia o code manualmente
+O usuário vê a barra de endereço (URL) com ?code=<um_code_grande>.
+Ele seleciona esse code e copia (excluindo ?code= e eventuais &state=... se houver).
+5. Colar o code na aplicação e trocar por token
+No seu app, você precisa de um TextBox ou algo similar onde o usuário possa colar o code. Em seguida, você faz o POST para o endpoint /token, algo como:
+
+csharp
+Copiar
+Editar
+private string codeVerifier; // guardado lá no passo 2
+
+public string ExchangeCodeForToken(string code)
+{
+    string tenantId = "...";
+    string tokenEndpoint = $"https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token";
+
+    string clientId = "...";
+    string redirectUri = "https://localhost/manualcallback";
+    string scope = "openid profile offline_access https://graph.microsoft.com/.default";
+    
+    // Monta o corpo
+    var form = new FormUrlEncodedContent(new []
+    {
+        new KeyValuePair<string,string>("grant_type","authorization_code"),
+        new KeyValuePair<string,string>("code", code),
+        new KeyValuePair<string,string>("redirect_uri", redirectUri),
+        new KeyValuePair<string,string>("client_id", clientId),
+        // A parte principal do PKCE:
+        new KeyValuePair<string,string>("code_verifier", codeVerifier),
+        // Mesmo scope
+        new KeyValuePair<string,string>("scope", scope)
+    });
+
+    using (var client = new HttpClient())
+    {
+        var response = client.PostAsync(tokenEndpoint, form).Result;
+        if (!response.IsSuccessStatusCode)
+        {
+            string error = response.Content.ReadAsStringAsync().Result;
+            throw new Exception("Falha ao obter token: " + error);
+        }
+
+        string json = response.Content.ReadAsStringAsync().Result;
+        // parse
+        dynamic obj = Newtonsoft.Json.JsonConvert.DeserializeObject(json);
+        string accessToken = obj.access_token;
+        string refreshToken = obj.refresh_token;
+        // ...
+        return accessToken;
+    }
+}
+Fluxo final:
+Usuário abre o link -> Faz login -> É redirecionado para “localhost/manualcallback?code=xxx” e vê erro de “página não encontrada”.
+Copia o xxx da barra de endereço.
+Cola no app, clica num botão “Obter Token”.
+O código chama ExchangeCodeForToken(code).
+Você obtém access_token, refresh_token etc.
+6. Observações importantes
+Não é automático: O usuário precisa copiar e colar.
+Segurança: o code fica exposto na barra de endereço, mas isso é padrão do Authorization Code Flow.
+A code_verifier deve ser a mesma que você gerou inicialmente (ao criar code_challenge). Se perder, não vai conseguir trocar o code por token.
+scope: openid profile offline_access é opcional, mas comum se você quer obter ID token (openid profile) e refresh token (offline_access). Se só precisar do access token para a Graph, poderia simplificar (mas geralmente openid profile offline_access é útil).
+redirect_uri: deve bater exatamente com o registrado no Azure AD.
+Conclusão
+Isso é o Fluxo Manual de PKCE:
+
+Nenhum servidor local é aberto.
+Nenhum netsh é usado.
+O usuário faz login e copia manualmente o code.
+Sua aplicação troca esse code no /token, usando grant_type=authorization_code + code_verifier.
+Pronto! Mesmo sem privilégios de administrador e sem servidor local, você consegue completar o Authorization Code Flow com PKCE.
