@@ -1,0 +1,100 @@
+O erro indica que há um problema ao tentar decodificar o conteúdo Base64 de um dos arquivos PEM, como o certificado (certificado.pem) ou a chave privada (chave.pem). Esse problema geralmente ocorre devido a:
+
+Formato incorreto do arquivo PEM:
+
+O conteúdo do arquivo PEM pode ter caracteres inesperados, como espaços em branco extras, quebras de linha incorretas ou caracteres que não são válidos para Base64.
+Delimitadores incorretos (-----BEGIN ...----- e -----END ...-----):
+
+Certifique-se de que o arquivo possui os delimitadores corretos.
+🔧 Soluções para o Problema
+1. Verificar o Formato do Arquivo PEM
+Certifique-se de que o conteúdo do arquivo certificado.pem ou chave.pem segue o formato correto.
+
+Exemplo do Formato Correto:
+
+Certificado (certificado.pem):
+
+css
+Copiar
+Editar
+-----BEGIN CERTIFICATE-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA...
+[conteúdo codificado em Base64]
+-----END CERTIFICATE-----
+Chave Privada (chave.pem):
+
+vbnet
+Copiar
+Editar
+-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKkwggSlAgEAAoIBAQ...
+[conteúdo codificado em Base64]
+-----END PRIVATE KEY-----
+2. Remover Quebras de Linha ou Caracteres Extras
+Certifique-se de que o conteúdo Base64 não contém:
+
+Espaços em branco extras no início ou no fim.
+Quebras de linha não necessárias.
+Você pode limpar o arquivo manualmente ou usar código para fazer isso:
+
+csharp
+Copiar
+Editar
+private static string CleanPemContent(string pemContent)
+{
+    return pemContent
+        .Replace("-----BEGIN CERTIFICATE-----", "")
+        .Replace("-----END CERTIFICATE-----", "")
+        .Replace("-----BEGIN PRIVATE KEY-----", "")
+        .Replace("-----END PRIVATE KEY-----", "")
+        .Replace("\n", "")
+        .Replace("\r", "")
+        .Trim();
+}
+Substitua o trecho no código original por isso:
+
+csharp
+Copiar
+Editar
+var certPem = CleanPemContent(File.ReadAllText(certPath));
+var keyPem = CleanPemContent(File.ReadAllText(keyPath));
+3. Testar Decodificação do Conteúdo Base64
+Adicione um código para testar a decodificação do Base64 antes de usá-lo no certificado:
+
+csharp
+Copiar
+Editar
+private static byte[] DecodeBase64(string base64String)
+{
+    try
+    {
+        return Convert.FromBase64String(base64String);
+    }
+    catch (FormatException ex)
+    {
+        throw new Exception("O conteúdo PEM contém caracteres inválidos ou não está em Base64.", ex);
+    }
+}
+No método LoadCertificateWithPrivateKey, substitua a decodificação de Base64:
+
+csharp
+Copiar
+Editar
+var certBytes = DecodeBase64(certPem);
+var keyBytes = DecodeBase64(keyPem);
+4. Validar os Arquivos PEM
+Se ainda houver problemas, use uma ferramenta como OpenSSL para verificar os arquivos:
+
+Verificar Certificado:
+
+bash
+Copiar
+Editar
+openssl x509 -in certificado.pem -text -noout
+Verificar Chave Privada:
+
+bash
+Copiar
+Editar
+openssl rsa -in chave.pem -check
+Se os arquivos forem válidos, o OpenSSL exibirá as informações do certificado/chave. Caso contrário, ele indicará o erro.
