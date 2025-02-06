@@ -1,0 +1,16 @@
+private async void SeuBotao_Click(object sender, EventArgs e)
+{
+    try
+    {
+        // Chama o método de autenticação e aguarda o resultado
+        string resultado = await AzureAuthentication.ObterTokenComCertificado();
+
+        // Exibe o resultado na MessageBox
+        MessageBox.Show(resultado, "Resultado da Autenticação", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    catch (Exception ex)
+    {
+        // Exibe o erro em caso de falha
+        MessageBox.Show($"Erro: {ex.Message}", "Erro na Autenticação", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
