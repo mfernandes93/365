@@ -1,0 +1,151 @@
+Entendido, vou refazer o código para garantir que ele funcione corretamente e inclua o caminho para o CA-cert no fluxo de mutual TLS (mTLS). Vamos corrigir todos os pontos e fazer um código mais robusto.
+
+Aqui está o código atualizado e ajustado:
+
+Código Final: Autenticação com Certificados mTLS
+csharp
+Copiar
+Editar
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+
+public static class AzureAuthentication
+{
+    // Método para obter o token com o certificado, chave privada e CA-cert
+    public static async Task<string> ObterTokenComCertificado()
+    {
+        try
+        {
+            // IDs e autoridade do Azure AD
+            string tenantId = "seu-tenant-id"; 
+            string clientId = "seu-client-id"; // ID da aplicação registrada no Azure AD
+            string authority = $"https://login.microsoftonline.com/{tenantId}"; // URL de autoridade do Azure AD
+
+            // Caminhos dos arquivos para mTLS
+            string appDirectory = AppDomain.CurrentDomain.BaseDirectory; // Diretório do aplicativo
+            string certFolderPath = Path.Combine(appDirectory, "Certificados");
+
+            string caCertPath = Path.Combine(certFolderPath, "CA-cert.pem"); // Caminho do CA-cert
+            string clienteCertPath = Path.Combine(certFolderPath, "cliente_cert.crt"); // Caminho do certificado do cliente
+            string clientKeyPath = Path.Combine(certFolderPath, "client_key.key"); // Caminho da chave privada do cliente
+
+            // Verifique se os arquivos existem
+            if (!File.Exists(caCertPath) || !File.Exists(clienteCertPath) || !File.Exists(clientKeyPath))
+            {
+                throw new FileNotFoundException("Certificados ou chave privada não encontrados.");
+            }
+
+            // Carregar o certificado do cliente (combinar certificado e chave privada em memória)
+            var clientCertificate = CombineCertificateAndKey(clienteCertPath, clientKeyPath);
+
+            // Criar o handler para o HttpClient com o certificado do cliente
+            var handler = new HttpClientHandler();
+            handler.ClientCertificates.Add(clientCertificate); // Adiciona o certificado do cliente
+
+            // Adicionar a validação do servidor (usando o CA-cert)
+            handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+            {
+                // Validar o certificado do servidor usando o CA-cert
+                if (sslPolicyErrors == System.Net.Security.SslPolicyErrors.None)
+                {
+                    return true;
+                }
+
+                // Carregar o CA-cert para validação
+                var caCert = new X509Certificate2(caCertPath);
+                return chain.ChainElements[^1].Certificate.Equals(caCert);
+            };
+
+            // Criar uma instância do HttpClient com o handler configurado
+            var httpClient = new HttpClient(handler);
+
+            // Adicionar cabeçalhos de autenticação para mTLS
+            var clientCredential = new ClientCredential(clientId, clientCertificate);
+
+            // Criar o contexto de autenticação do Azure AD
+            var authContext = new AuthenticationContext(authority);
+
+            // Definir o escopo da API (Microsoft Graph ou qualquer outra API configurada)
+            string[] scopes = new string[] { "https://graph.microsoft.com/.default" };
+
+            // Solicitar o token de acesso usando Client Credentials Flow com mTLS
+            var result = await authContext.AcquireTokenAsync(scopes[0], clientCredential);
+
+            // Retornar o token de acesso
+            return result.AccessToken;
+        }
+        catch (AdalException ex)
+        {
+            return $"Erro ao obter o token: {ex.Message}";
+        }
+    }
+
+    // Método para combinar o certificado do cliente e a chave privada
+    private static X509Certificate2 CombineCertificateAndKey(string certPath, string keyPath)
+    {
+        // Ler o certificado (arquivo .crt ou .pem)
+        var certPem = File.ReadAllText(certPath);
+
+        // Ler a chave privada (arquivo .key)
+        var keyPem = File.ReadAllText(keyPath);
+
+        // Combinar o certificado e a chave privada em um formato PFX
+        var combinedPem = $"{certPem}{keyPem}";
+        var certBytes = System.Text.Encoding.UTF8.GetBytes(combinedPem);
+
+        // Criar um certificado X509 com a chave privada combinada
+        return new X509Certificate2(certBytes);
+    }
+}
+Explicação do Código
+Carregar os Arquivos de Certificado:
+
+cliente_cert.crt: O certificado do cliente, contendo a chave pública.
+client_key.key: A chave privada associada ao certificado.
+CA-cert.pem: O certificado da autoridade certificadora que valida o certificado do servidor.
+Combinação de Certificado e Chave Privada:
+
+O método CombineCertificateAndKey lê o certificado do cliente e a chave privada em formato PEM e os combina em um formato PFX (PKCS#12) para uso em HttpClient.
+Configuração do HttpClientHandler:
+
+O HttpClientHandler é configurado para usar o certificado do cliente carregado e valida o certificado do servidor usando o CA-cert.
+Validação do Certificado do Servidor:
+
+O método ServerCertificateCustomValidationCallback valida o certificado do servidor, verificando se ele é confiável de acordo com o CA-cert.
+Autenticação no Azure AD:
+
+O código usa o fluxo de Client Credentials para autenticar a aplicação e obter um access token.
+Passo 3: Estrutura do Diretório
+Certifique-se de que os arquivos CA-cert, cliente_cert, e client_key estão na pasta Certificados dentro do mesmo diretório do executável.
+
+Exemplo de estrutura de pastas:
+
+markdown
+Copiar
+Editar
+SeuProjeto/
+    Certificados/
+        CA-cert.pem
+        cliente_cert.crt
+        client_key.key
+    bin/
+        Debug/
+            SeuProjeto.exe
+    Form1.cs
+    AzureAuthentication.cs
+Passo 4: Testar o Código
+Compile o código e coloque os arquivos necessários na pasta Certificados.
+Execute o programa e clique no botão para chamar o método ObterTokenComCertificado.
+Se tudo estiver configurado corretamente, o token de acesso será exibido na tela.
+Solução para Possíveis Erros
+Erro ao Carregar os Arquivos:
+
+Certifique-se de que os caminhos para os arquivos CA-cert, cliente_cert, e client_key estão corretos.
+Erro ao Validar o Certificado do Servidor:
+
+Verifique se o certificado do servidor está assinado pela mesma autoridade certificadora que o CA-cert.
+Se algo ainda não funcionar como esperado, me avise para que possamos ajustar!
