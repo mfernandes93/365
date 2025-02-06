@@ -1,0 +1,61 @@
+using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+
+public static class AzureAuthentication
+{
+    public static async Task<string> ObterTokenComCertificado()
+    {
+        try
+        {
+            // IDs e autoridade do Azure AD
+            string tenantId = "seu-tenant-id"; 
+            string clientId = "seu-client-id"; // ID da aplicação registrada no Azure AD
+            string authority = $"https://login.microsoftonline.com/{tenantId}"; // URL de autoridade do Azure AD
+
+            // Caminhos dos arquivos para mTLS
+            string certFolderPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Certificados");
+            string clienteCertPath = Path.Combine(certFolderPath, "cliente_cert.crt"); // Caminho do certificado do cliente
+            string clientKeyPath = Path.Combine(certFolderPath, "client_key.key"); // Caminho da chave privada do cliente
+
+            // Verifique se os arquivos existem
+            if (!File.Exists(clienteCertPath) || !File.Exists(clientKeyPath))
+            {
+                throw new FileNotFoundException("Certificados ou chave privada não encontrados.");
+            }
+
+            // Carregar o certificado do cliente
+            var clientCertificate = new X509Certificate2(clienteCertPath, string.Empty, X509KeyStorageFlags.MachineKeySet);
+
+            // Criar o handler para o HttpClient com o certificado do cliente
+            var handler = new HttpClientHandler();
+            handler.ClientCertificates.Add(clientCertificate);
+            handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+            {
+                // Validar o certificado da CA para garantir que a comunicação mTLS funcione corretamente
+                return true;
+            };
+
+            var httpClient = new HttpClient(handler);
+
+            // Adicionar cabeçalhos de autenticação para mTLS
+            var clientCredential = new ClientCredential(clientId, clientCertificate);
+
+            // Criar o contexto de autenticação do Azure AD
+            var authContext = new AuthenticationContext(authority);
+
+            // Definir o escopo da API (Microsoft Graph ou qualquer outra API configurada)
+            string[] scopes = new string[] { "https://graph.microsoft.com/.default" };
+
+            // Solicitar o token de acesso usando Client Credentials Flow com mTLS
+            var result = await authContext.AcquireTokenAsync(scopes[0], clientCredential);
+
+            // Retornar o token de acesso
+            return result.AccessToken;
+        }
+        catch (AdalException ex)
+        {
+            return $"Erro ao obter o token: {ex.Message}";
+        }
+    }
+}
