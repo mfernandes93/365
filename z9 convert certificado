@@ -1,1 +1,5 @@
 openssl x509 -inform der -in certificado.txt -out certificado.pem
+
+openssl x509 -inform der -in certificado.cer -out certificado.pem
+
+openssl pkcs7 -print_certs -in certificado.p7b -out certificado.pem
