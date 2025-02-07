@@ -1,0 +1,117 @@
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
+
+public static class MutualTlsClient
+{
+    /// <summary>
+    /// Faz uma requisição POST para o endpoint usando Mutual TLS.
+    /// </summary>
+    /// <returns>Resposta da API como string.</returns>
+    public static string PostWithMutualTls()
+    {
+        try
+        {
+            // Caminho do arquivo PFX e senha do certificado
+            string pfxFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "certificado.pfx"); // Certificado na pasta raiz do programa
+            string pfxPassword = "sua-senha"; // Senha do PFX
+
+            // Caminho do certificado da CA
+            string caCertPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CA-cert.pem"); // Certificado da CA na pasta raiz do programa
+
+            // URL do endpoint protegido
+            string vaultUrl = "https://vault.itau/v1/auth/cert/login";
+
+            // Carregar o certificado do cliente (PFX)
+            var clientCertificate = new X509Certificate2(pfxFilePath, pfxPassword);
+
+            // Carregar o certificado da Autoridade Certificadora (CA)
+            var caCertificate = new X509Certificate2(File.ReadAllBytes(caCertPath));
+
+            // Configurar o WebRequestHandler
+            var handler = new WebRequestHandler();
+            handler.ClientCertificates.Add(clientCertificate);
+
+            // Validação do certificado do servidor (TLS)
+            handler.ServerCertificateCustomValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+            {
+                // Verificar se o último certificado na cadeia é o certificado da CA
+                if (chain.ChainElements.Count > 0)
+                {
+                    var rootCert = chain.ChainElements[^1].Certificate; // Último certificado
+                    return rootCert.Equals(caCertificate); // Comparar com a CA fornecida
+                }
+                return false;
+            };
+
+            // Fazer a requisição POST
+            using (var client = new HttpClient(handler))
+            {
+                var response = client.PostAsync(vaultUrl, null).Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Erro na requisição: {response.StatusCode} - {response.ReasonPhrase}");
+                }
+
+                // Ler e retornar o conteúdo da resposta
+                return response.Content.ReadAsStringAsync().Result;
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Erro ao executar requisição com Mutual TLS: {ex.Message}", ex);
+        }
+    }
+}
+Modificações Feitas
+Carregamento do Certificado PFX a Partir da Pasta Raiz:
+
+O caminho do arquivo PFX (certificado.pfx) é gerado automaticamente a partir do diretório raiz do programa usando:
+csharp
+Copiar
+Editar
+Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "certificado.pfx")
+Carregamento do Certificado da CA (CA-cert.pem):
+
+O mesmo método foi usado para gerar o caminho do arquivo CA-cert.pem.
+Parâmetros Diretos no Código:
+
+Os valores de pfxPassword e vaultUrl foram embutidos diretamente no código.
+Uso no Windows Forms
+Chamada no Botão
+Aqui está como você pode chamar o método diretamente de um botão no formulário e exibir o resultado:
+
+csharp
+Copiar
+Editar
+private void btnEnviarRequisicao_Click(object sender, EventArgs e)
+{
+    try
+    {
+        // Chamar o método para fazer a requisição
+        string resposta = MutualTlsClient.PostWithMutualTls();
+
+        // Mostrar a resposta em uma MessageBox
+        MessageBox.Show(resposta, "Resposta da API", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    catch (Exception ex)
+    {
+        // Exibir erro em caso de falha
+        MessageBox.Show($"Erro: {ex.Message}", "Erro na Requisição", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
+Organização dos Arquivos
+Certifique-se de que os arquivos certificado.pfx e CA-cert.pem estejam na mesma pasta que o executável do programa. A estrutura seria algo assim:
+
+plaintext
+Copiar
+Editar
+- MeuPrograma.exe
+- certificado.pfx
+- CA-cert.pem
+Testando o Código
+Compile o programa.
+Execute e clique no botão para enviar a requisição.
+O programa carregará os certificados, validará o servidor e exibirá a resposta da API.
+Se precisar de mais ajustes ou ajuda, é só avisar! 🚀
