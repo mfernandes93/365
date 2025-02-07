@@ -1,0 +1,149 @@
+O erro "versão incorreta do provedor" ocorre frequentemente quando o RSACryptoServiceProvider não é configurado corretamente para usar o CSP (Cryptographic Service Provider) correto no .NET Framework 4.5.2. Isso pode acontecer devido a:
+
+Chave privada incompatível com o CSP padrão.
+Ausência de configurações apropriadas para o provedor no Windows.
+A chave é no formato CNG (Cryptography Next Generation), mas você está tentando usar CSP.
+Solução
+Precisamos ajustar o código para usar o provedor correto. Isso é feito configurando o RSACryptoServiceProvider explicitamente com os parâmetros certos.
+
+Código Ajustado
+Aqui está o código revisado para resolver esse problema:
+
+csharp
+Copiar
+Editar
+using System;
+using System.IO;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+
+public static class AzureAuthenticationHelper
+{
+    // Método para carregar certificado e associar chave privada
+    public static X509Certificate2 LoadCertificateWithPrivateKey(string certPath, string keyPath)
+    {
+        // Ler o certificado PEM
+        var certPem = File.ReadAllText(certPath);
+        var certBytes = Convert.FromBase64String(certPem
+            .Replace("-----BEGIN CERTIFICATE-----", "")
+            .Replace("-----END CERTIFICATE-----", "")
+            .Replace("\n", "")
+            .Replace("\r", ""));
+
+        // Criar o certificado
+        var certificate = new X509Certificate2(certBytes);
+
+        // Ler a chave privada PEM e associar ao certificado
+        var keyPem = File.ReadAllText(keyPath);
+        var rsa = ImportPrivateKey(keyPem);
+
+        // Associar a chave privada ao certificado
+        certificate = AssociatePrivateKey(certificate, rsa);
+
+        return certificate;
+    }
+
+    // Método para importar chave privada PEM no RSACryptoServiceProvider
+    private static RSACryptoServiceProvider ImportPrivateKey(string privateKeyPem)
+    {
+        privateKeyPem = privateKeyPem.Replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                                     .Replace("-----END RSA PRIVATE KEY-----", "")
+                                     .Replace("\n", "")
+                                     .Replace("\r", "")
+                                     .Trim();
+
+        byte[] privateKeyBytes = Convert.FromBase64String(privateKeyPem);
+
+        // Configurar o CSP para RSA
+        var cspParameters = new CspParameters
+        {
+            ProviderType = 1, // PROV_RSA_FULL
+            KeyContainerName = Guid.NewGuid().ToString(),
+            Flags = CspProviderFlags.UseMachineKeyStore
+        };
+
+        var rsaProvider = new RSACryptoServiceProvider(cspParameters);
+        rsaProvider.ImportRSAPrivateKey(privateKeyBytes, out _);
+
+        return rsaProvider;
+    }
+
+    // Método para associar a chave privada ao certificado
+    private static X509Certificate2 AssociatePrivateKey(X509Certificate2 certificate, RSACryptoServiceProvider privateKey)
+    {
+        var certWithKey = new X509Certificate2(certificate.RawData); // Clonar o certificado original
+        certWithKey.PrivateKey = privateKey; // Associar a chave privada
+        return certWithKey;
+    }
+}
+Explicação das Alterações
+Configuração do CSP (CspParameters):
+
+Adicionei uma configuração explícita para o CSP (Cryptographic Service Provider) ao criar o RSACryptoServiceProvider:
+ProviderType = 1: Define o tipo do provedor como RSA (PROV_RSA_FULL).
+KeyContainerName: Um nome exclusivo para o contêiner da chave.
+Flags = UseMachineKeyStore: Garante que as chaves sejam armazenadas no repositório de chaves da máquina.
+ImportRSAPrivateKey (Substituição Direta):
+
+Substituí o uso de métodos mais avançados não suportados no .NET Framework 4.5.2.
+Agora ele decodifica a chave Base64 e importa diretamente no RSACryptoServiceProvider.
+Associação da Chave ao Certificado:
+
+O método AssociatePrivateKey cria um novo certificado e associa a chave privada ao certificado carregado.
+Passo a Passo para Testar
+Certifique-se de que os Arquivos PEM Estão Corretos:
+
+O arquivo certificado.pem deve começar com:
+css
+Copiar
+Editar
+-----BEGIN CERTIFICATE-----
+O arquivo chave.pem deve começar com:
+vbnet
+Copiar
+Editar
+-----BEGIN RSA PRIVATE KEY-----
+Coloque os Arquivos no Caminho Esperado:
+
+Salve os arquivos PEM no diretório especificado no código (Certificados/).
+Chame o Método no Windows Forms:
+
+Use o método LoadCertificateWithPrivateKey para carregar o certificado e associar a chave privada.
+csharp
+Copiar
+Editar
+private async void btnAutenticar_Click(object sender, EventArgs e)
+{
+    try
+    {
+        string resultado = await AzureAuthentication.ObterTokenComCertificado();
+        MessageBox.Show(resultado, "Resultado da Autenticação", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show($"Erro: {ex.Message}", "Erro na Autenticação", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
+Erros Comuns e Soluções
+Erro de Provedor Inválido:
+
+Certifique-se de que o sistema operacional tem suporte ao RSA CSP. No Windows, isso deve funcionar em versões modernas.
+Erro na Chave Privada:
+
+Use ferramentas como OpenSSL para validar a chave:
+bash
+Copiar
+Editar
+openssl rsa -in chave.pem -check
+Erro no Formato do Certificado:
+
+Verifique se o certificado é válido:
+bash
+Copiar
+Editar
+openssl x509 -in certificado.pem -text -noout
+Resumo
+O código agora configura explicitamente o CSP para resolver o erro "versão incorreta do provedor".
+A chave privada é importada usando RSACryptoServiceProvider, compatível com o .NET Framework 4.5.2.
+Certifique-se de que os arquivos certificado.pem e chave.pem estão no formato correto.
+Se precisar de mais ajuda, estou à disposição! 🚀
