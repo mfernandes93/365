@@ -1,0 +1,51 @@
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        try
+        {
+            // Caminhos para os arquivos PEM
+            string certFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_cert.pem");
+            string keyFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_key.pem");
+
+            // URL do endpoint
+            string vaultUrl = "https://vault-tradops.dev.ops.aws.cloud.ihf/v1/auth/cert/login";
+
+            // Carregar o certificado público
+            var publicCert = X509Certificate2.CreateFromPemFile(certFilePath);
+
+            // Carregar a chave privada
+            var privateKey = RSA.Create();
+            privateKey.ImportFromPem(File.ReadAllText(keyFilePath));
+
+            // Combinar o certificado com a chave privada
+            var certWithKey = publicCert.CopyWithPrivateKey(privateKey);
+
+            // Configurar o HttpClientHandler com o certificado
+            var handler = new HttpClientHandler();
+            handler.ClientCertificates.Add(certWithKey);
+
+            // Fazer a requisição POST
+            using (var client = new HttpClient(handler))
+            {
+                var response = client.PostAsync(vaultUrl, null).Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Erro na requisição: {response.StatusCode} - {response.ReasonPhrase}");
+                }
+
+                Console.WriteLine(response.Content.ReadAsStringAsync().Result);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Erro: {ex.Message}");
+        }
+    }
+}
