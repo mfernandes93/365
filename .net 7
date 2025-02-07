@@ -1,35 +1,44 @@
-using System;
-using System.IO;
-using System.Net.Http;
-using System.Security.Cryptography;
-using System.Security.Cryptography.X509Certificates;
-
-class Program
-{
-    static void Main(string[] args)
-    {
-        try
+ try
         {
-            // Caminhos para os arquivos PEM
-            string certFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_cert.pem");
-            string keyFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_key.pem");
+            // Caminho do arquivo PFX (inclui o certificado e a chave privada)
+            string pfxFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "client_cert.pfx");
+            string pfxPassword = "password"; // Senha do PFX
 
-            // URL do endpoint
+            // Caminho do certificado da CA
+            string caCertPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CA-cert.pem");
+
+            // URL do endpoint protegido
             string vaultUrl = "https://vault-tradops.dev.ops.aws.cloud.ihf/v1/auth/cert/login";
 
-            // Carregar o certificado público
-            var publicCert = X509Certificate2.CreateFromPemFile(certFilePath);
+            // Carregar o certificado do cliente (PFX)
+            var clientCertificate = new X509Certificate2(pfxFilePath, pfxPassword);
 
-            // Carregar a chave privada
-            var privateKey = RSA.Create();
-            privateKey.ImportFromPem(File.ReadAllText(keyFilePath));
+            // Carregar o certificado da CA
+            var caCertificate = new X509Certificate2(File.ReadAllBytes(caCertPath));
 
-            // Combinar o certificado com a chave privada
-            var certWithKey = publicCert.CopyWithPrivateKey(privateKey);
+            // Configurar o ServicePointManager para validação personalizada de certificados
+            ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+            {
+                // Validar a cadeia de certificados manualmente
+                if (chain != null && chain.Build((X509Certificate2)cert))
+                {
+                    foreach (var chainElement in chain.ChainElements)
+                    {
+                        if (chainElement.Certificate.Thumbprint == caCertificate.Thumbprint)
+                        {
+                            return true; // Certificado da CA encontrado
+                        }
+                    }
+                }
+                return false; // Certificado da CA não encontrado
+            };
 
-            // Configurar o HttpClientHandler com o certificado
-            var handler = new HttpClientHandler();
-            handler.ClientCertificates.Add(certWithKey);
+            // Forçar uso de TLS 1.2
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+
+            // Configurar o WebRequestHandler com o certificado do cliente
+            var handler = new WebRequestHandler();
+            handler.ClientCertificates.Add(clientCertificate);
 
             // Fazer a requisição POST
             using (var client = new HttpClient(handler))
@@ -40,12 +49,13 @@ class Program
                     throw new Exception($"Erro na requisição: {response.StatusCode} - {response.ReasonPhrase}");
                 }
 
-                Console.WriteLine(response.Content.ReadAsStringAsync().Result);
+                // Ler e exibir a resposta
+                var content = response.Content.ReadAsStringAsync().Result;
+                Console.WriteLine("Resposta da API:");
+                Console.WriteLine(content);
             }
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Erro: {ex.Message}");
         }
-    }
-}
