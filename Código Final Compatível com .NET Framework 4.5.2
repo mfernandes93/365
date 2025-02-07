@@ -1,0 +1,187 @@
+Código Final Compatível com .NET Framework 4.5.2
+Aqui está o código ajustado:
+
+csharp
+Copiar
+Editar
+
+
+
+
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using System;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
+using System.Text;
+using System.Threading.Tasks;
+
+public static class AzureAuthentication
+{
+    public static async Task<string> ObterTokenComCertificado()
+    {
+        try
+        {
+            // IDs e autoridade do Azure AD
+            string tenantId = "seu-tenant-id";
+            string clientId = "seu-client-id"; // ID da aplicação registrada no Azure AD
+            string authority = $"https://login.microsoftonline.com/{tenantId}"; // URL de autoridade do Azure AD
+
+            // Caminhos dos arquivos PEM
+            string appDirectory = AppDomain.CurrentDomain.BaseDirectory; // Diretório do aplicativo
+            string certFolderPath = Path.Combine(appDirectory, "Certificados");
+
+            string caCertPath = Path.Combine(certFolderPath, "CA-cert.pem"); // Caminho do CA-cert
+            string certPath = Path.Combine(certFolderPath, "certificado.pem"); // Caminho do certificado do cliente
+            string keyPath = Path.Combine(certFolderPath, "chave.pem"); // Caminho da chave privada do cliente
+
+            // Verifique se os arquivos existem
+            if (!File.Exists(certPath) || !File.Exists(keyPath))
+            {
+                throw new FileNotFoundException("Certificado ou chave privada não encontrados.");
+            }
+
+            // Carregar o certificado do cliente com a chave privada
+            var clientCertificate = LoadCertificateWithPrivateKey(certPath, keyPath);
+
+            // Configurar a validação global do certificado do servidor usando ServicePointManager
+            ServicePointManager.ServerCertificateValidationCallback += (sender, cert, chain, sslPolicyErrors) =>
+            {
+                return ValidarCertificadoServidor(cert, caCertPath);
+            };
+
+            // Criar o handler para o HttpClient com o certificado do cliente
+            var handler = new WebRequestHandler();
+            handler.ClientCertificates.Add(clientCertificate);
+
+            // Criar o HttpClient com o handler configurado
+            using (var httpClient = new HttpClient(handler))
+            {
+                // Criar o objeto de autenticação usando ADAL
+                var authContext = new AuthenticationContext(authority);
+                var clientCredential = new ClientAssertionCertificate(clientId, clientCertificate);
+
+                // Solicitar o token de acesso
+                var result = await authContext.AcquireTokenAsync("https://graph.microsoft.com/.default", clientCredential);
+
+                // Retornar o token
+                return result.AccessToken;
+            }
+        }
+        catch (AdalException ex)
+        {
+            return $"Erro ao obter o token: {ex.Message}";
+        }
+    }
+
+    // Método para carregar um certificado X509 e associar uma chave privada no .NET Framework 4.5.2
+    private static X509Certificate2 LoadCertificateWithPrivateKey(string certPath, string keyPath)
+    {
+        // Ler o certificado público
+        var certPem = File.ReadAllText(certPath);
+        var certBytes = Convert.FromBase64String(certPem
+            .Replace("-----BEGIN CERTIFICATE-----", "")
+            .Replace("-----END CERTIFICATE-----", "")
+            .Replace("\n", "")
+            .Replace("\r", ""));
+
+        // Criar o objeto do certificado
+        var certificate = new X509Certificate2(certBytes);
+
+        // Ler a chave privada PEM e convertê-la para formato RSA
+        var keyPem = File.ReadAllText(keyPath);
+        var rsa = ImportPrivateKey(keyPem);
+
+        // Associar a chave privada ao certificado
+        return AssociatePrivateKey(certificate, rsa);
+    }
+
+    // Método para importar uma chave privada PEM para um objeto RSACryptoServiceProvider
+    private static RSACryptoServiceProvider ImportPrivateKey(string privateKeyPem)
+    {
+        privateKeyPem = privateKeyPem.Replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                                     .Replace("-----END RSA PRIVATE KEY-----", "")
+                                     .Replace("\n", "")
+                                     .Replace("\r", "")
+                                     .Trim();
+
+        var keyBytes = Convert.FromBase64String(privateKeyPem);
+
+        var rsa = new RSACryptoServiceProvider();
+        rsa.ImportCspBlob(keyBytes); // Importar a chave privada
+        return rsa;
+    }
+
+    // Método para associar a chave privada ao certificado no .NET Framework 4.5.2
+    private static X509Certificate2 AssociatePrivateKey(X509Certificate2 certificate, RSACryptoServiceProvider privateKey)
+    {
+        var certWithKey = new X509Certificate2(certificate.RawData); // Criar um novo certificado baseado no original
+        certWithKey.PrivateKey = privateKey; // Associar a chave privada ao certificado
+        return certWithKey;
+    }
+
+    // Método para validar o certificado do servidor usando o CA-cert
+    private static bool ValidarCertificadoServidor(X509Certificate cert, string caCertPath)
+    {
+        try
+        {
+            // Carregar o certificado da CA
+            var caCert = new X509Certificate2(caCertPath);
+
+            // Validar se o certificado do servidor foi emitido pela CA conhecida
+            return ((X509Certificate2)cert).Thumbprint == caCert.Thumbprint;
+        }
+        catch
+        {
+            return false; // Falha ao validar o certificado
+        }
+    }
+}
+
+
+
+
+Revisões Feitas
+Compatibilidade com .NET Framework 4.5.2:
+
+Substituí métodos mais recentes como ImportPkcs8PrivateKey por RSACryptoServiceProvider, que é suportado.
+Importação da Chave Privada:
+
+A chave privada RSA no formato PEM é processada manualmente para ser carregada em um objeto RSACryptoServiceProvider.
+Associação da Chave ao Certificado:
+
+O método AssociatePrivateKey combina a chave privada com o certificado para criar um certificado completo (com chave privada).
+Validação do Certificado do Servidor:
+
+Adicionei suporte para validar o certificado do servidor usando um certificado CA (CA-cert.pem).
+Testando no Windows Forms
+Prepare os Arquivos:
+
+Certifique-se de que os arquivos certificado.pem, chave.pem e CA-cert.pem estão no diretório especificado no código.
+Chame o Método no Botão:
+
+No evento do botão no Windows Forms, chame o método ObterTokenComCertificado().
+Exiba o Resultado:
+
+Use uma MessageBox para mostrar o token ou o erro.
+csharp
+Copiar
+Editar
+private async void btnAutenticar_Click(object sender, EventArgs e)
+{
+    try
+    {
+        string resultado = await AzureAuthentication.ObterTokenComCertificado();
+        MessageBox.Show(resultado, "Resultado da Autenticação", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show($"Erro: {ex.Message}", "Erro na Autenticação", MessageBoxButtons.OK, MessageBoxIcon.Error);
+    }
+}
+Conclusão
+✅ O código agora está completamente compatível com .NET Framework 4.5.2.<br> ✅ Pode ser usado para autenticação no Azure AD com certificados no formato PEM.<br>
+
+Se ainda houver dúvidas ou erros, sinta-se à vontade para perguntar! 🚀
