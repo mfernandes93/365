@@ -1,1 +1,76 @@
 
+using System;
+using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Security.Cryptography.X509Certificates;
+
+public static class MutualTlsClient
+{
+    /// <summary>
+    /// Faz uma requisição POST para o endpoint usando Mutual TLS.
+    /// </summary>
+    /// <returns>Resposta da API como string.</returns>
+    public static string PostWithMutualTls()
+    {
+        try
+        {
+            // Caminho do arquivo PFX e senha do certificado
+            string pfxFilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "certificado.pfx"); // Certificado na pasta raiz do programa
+            string pfxPassword = "sua-senha"; // Senha do PFX
+
+            // Caminho do certificado da CA
+            string caCertPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CA-cert.pem"); // Certificado da CA na pasta raiz do programa
+
+            // URL do endpoint protegido
+            string vaultUrl = "https://vault.itau/v1/auth/cert/login";
+
+            // Carregar o certificado do cliente (PFX)
+            var clientCertificate = new X509Certificate2(pfxFilePath, pfxPassword);
+
+            // Carregar o certificado da Autoridade Certificadora (CA)
+            var caCertificate = new X509Certificate2(File.ReadAllBytes(caCertPath));
+
+            // Configurar o ServicePointManager para validação personalizada de certificados
+            ServicePointManager.ServerCertificateValidationCallback = (sender, cert, chain, sslPolicyErrors) =>
+            {
+                // Validar manualmente a cadeia de certificados
+                if (chain != null && chain.Build((X509Certificate2)cert))
+                {
+                    foreach (var chainElement in chain.ChainElements)
+                    {
+                        if (chainElement.Certificate.Thumbprint == caCertificate.Thumbprint)
+                        {
+                            return true; // Certificado da CA encontrado
+                        }
+                    }
+                }
+                return false; // Certificado da CA não encontrado
+            };
+
+            // Configurar o ServicePointManager para usar TLS 1.2
+            ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+
+            // Configurar o WebRequestHandler com o certificado do cliente
+            var handler = new WebRequestHandler();
+            handler.ClientCertificates.Add(clientCertificate);
+
+            // Fazer a requisição POST
+            using (var client = new HttpClient(handler))
+            {
+                var response = client.PostAsync(vaultUrl, null).Result;
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new Exception($"Erro na requisição: {response.StatusCode} - {response.ReasonPhrase}");
+                }
+
+                // Ler e retornar o conteúdo da resposta
+                return response.Content.ReadAsStringAsync().Result;
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Erro ao executar requisição com Mutual TLS: {ex.Message}", ex);
+        }
+    }
+}
