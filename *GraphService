@@ -1,0 +1,117 @@
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+
+public static class GraphService
+{
+    /// <summary>
+    /// 1) Carrega o PFX (caminho e senha definidos localmente)
+    /// 2) Usa ADAL para obter Token Azure AD (App-Only/Certificado)
+    /// 3) Chama um endpoint do Graph (/users) e retorna o conteúdo JSON ou erro
+    /// </summary>
+    public static async Task<string> CarregarPfxObterTokenEChamarGraph()
+    {
+        try
+        {
+            // --- [1. Definição de valores localmente] ---
+            // Ajuste conforme seu ambiente
+            string pfxPath = @"C:\caminho\do\arquivo\SEU_CERTIFICADO.pfx";
+            string pfxPassword = "SUA_SENHA_PFX";
+
+            // Tenant e ClientId do seu App Registration no Azure
+            string tenantId = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"; // seu tenant
+            string clientId = "yyyyyyyy-yyyy-yyyy-yyyy-yyyyyyyyyyyy"; // seu ClientId
+
+            // --- [2. Carrega o .pfx] ---
+            var certificate = new X509Certificate2(
+                pfxPath,
+                pfxPassword,
+                // Flags comuns para uso em .NET 4.5.2
+                X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.Exportable
+            );
+
+            // Monta a authority (endpoint do Azure AD para o seu tenant)
+            string authority = $"https://login.microsoftonline.com/{tenantId}";
+
+            // Resource do Microsoft Graph
+            string resource = "https://graph.microsoft.com";
+
+            // --- [3. Usa ADAL para obter o token (App-Only com Certificado)] ---
+            var authContext = new AuthenticationContext(authority);
+            var certCred = new ClientAssertionCertificate(clientId, certificate);
+
+            // Faz a requisição do token ao Azure AD
+            AuthenticationResult result = await authContext.AcquireTokenAsync(resource, certCred);
+            string accessToken = result.AccessToken;
+
+            // --- [4. Chama o Microsoft Graph para teste (/users)] ---
+            string graphEndpoint = "https://graph.microsoft.com/v1.0/users";
+            string graphResponse = await ChamarGraphAsync(accessToken, graphEndpoint);
+
+            return graphResponse;
+        }
+        catch (Exception ex)
+        {
+            // Se ocorrer algum erro, retornamos a mensagem
+            return $"Erro ao processar: {ex.Message}\n{ex.StackTrace}";
+        }
+    }
+
+    /// <summary>
+    /// Faz uma chamada GET ao Microsoft Graph usando Bearer Token.
+    /// </summary>
+    private static async Task<string> ChamarGraphAsync(string accessToken, string url)
+    {
+        using (var httpClient = new HttpClient())
+        {
+            httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", accessToken);
+
+            var response = await httpClient.GetAsync(url);
+            string content = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                return $"Sucesso! Resposta do Graph:\n{content}";
+            }
+            else
+            {
+                return $"Falha ao chamar Graph. Status: {response.StatusCode}\n{content}";
+            }
+        }
+    }
+}
+Como usar esse método
+Você pode chamá-lo, por exemplo, em um Main (ou em outro lugar do seu código):
+
+csharp
+Copiar
+Editar
+static void Main(string[] args)
+{
+    // Em .NET 4.5.2, se precisar de async, faça:
+    var task = MainAsync();
+    task.Wait(); // Sincroniza no final
+
+    Console.ReadKey();
+}
+
+static async Task MainAsync()
+{
+    // Simplesmente chama o método e recebe a resposta
+    string resultado = await GraphService.CarregarPfxObterTokenEChamarGraph();
+
+    Console.WriteLine(resultado);
+}
+Observações
+Personalize as variáveis locais:
+pfxPath, pfxPassword, tenantId, clientId devem refletir seu cenário.
+Certificado no Azure:
+Lembre de fazer upload do .cer (público) no seu App Registration, em “Certificates & secrets”.
+Permissões:
+Se quiser chamar /users, precisa de “User.Read.All” (Application permission) e admin consent no App Registration.
+Se quiser ler e-mails (via /users/{id}/messages), precisa de “Mail.Read” (Application permission) + admin consent.
+Assim, toda a lógica de carregar PFX, obter token e chamar Graph fica encapsulada em um único método, sem parâmetros, utilizando variáveis locais para o caminho e credenciais.
