@@ -1,0 +1,118 @@
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Security.Cryptography.X509Certificates;
+using System.Threading.Tasks;
+using Microsoft.IdentityModel.Clients.ActiveDirectory;
+using Newtonsoft.Json.Linq;
+
+public static class VaultAzureAutenticacao
+{
+    // --------------------------------------------
+    // [Ajustar as constantes/conexões conforme seu cenário]
+    // --------------------------------------------
+    
+    private static readonly string vaultBaseUrl = "https://SEU_VAULT_URL:8200"; 
+    private static readonly string vaultCertPfxPath = @"C:\caminho\vault-cert.pfx"; 
+    private static readonly string vaultCertPfxPass = "SENHA_PFX"; 
+    private static readonly string loginPath = "/v1/auth/cert/login"; 
+    private static readonly string secretPath = "/v1/secret/data/azure-app-secret"; 
+    // Se KV v1, talvez "/v1/secret/azure-app-secret"
+
+    // Informações do Azure AD (App Registration) - para o Client Secret Flow
+    private static readonly string tenantId = "SEU_TENANT_ID";
+    private static readonly string clientId = "SEU_CLIENT_ID";
+    private static readonly string resource = "https://graph.microsoft.com"; 
+    // Ajuste se quiser outro resource
+
+    /// <summary>
+    /// 1) Autentica no Vault via mTLS, chamando POST /auth/cert/login.
+    /// Retorna o token do Vault (client_token).
+    /// </summary>
+    public static async Task<string> ObterVaultTokenViaMutualTlsAsync()
+    {
+        // (Opcional) Forçar TLS 1.2 no .NET 4.5.2, se necessário
+        System.Net.ServicePointManager.SecurityProtocol =
+            System.Net.SecurityProtocolType.Tls12 |
+            System.Net.SecurityProtocolType.Tls11 |
+            System.Net.SecurityProtocolType.Tls;
+
+        // Carrega o PFX do certificado de cliente (para mTLS com Vault)
+        var clientCertificate = new X509Certificate2(
+            vaultCertPfxPath,
+            vaultCertPfxPass,
+            X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.Exportable
+        );
+
+        // Configura o handler para apresentar o certificado ao Vault
+        var handler = new HttpClientHandler();
+        handler.ClientCertificates.Add(clientCertificate);
+
+        using (var httpClient = new HttpClient(handler))
+        {
+            httpClient.BaseAddress = new Uri(vaultBaseUrl);
+
+            // Faz a requisição POST (corpo vazio ou JSON, dependendo do seu setup)
+            var response = await httpClient.PostAsync(loginPath, null);
+            if (!response.IsSuccessStatusCode)
+            {
+                string err = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Erro ao autenticar no Vault: {response.StatusCode}\n{err}");
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            var obj = JObject.Parse(json);
+
+            // Extrai o token do Vault
+            string vaultToken = obj["auth"]?["client_token"]?.ToString();
+            if (string.IsNullOrEmpty(vaultToken))
+                throw new Exception($"Não foi possível extrair 'client_token' do JSON:\n{json}");
+
+            return vaultToken;
+        }
+    }
+
+    /// <summary>
+    /// 2) Usando o Vault Token, lê o client_secret do Azure no Vault,
+    /// depois chama o Azure AD (ADAL) com clientId + clientSecret,
+    /// e retorna o token (Bearer) do Azure.
+    /// </summary>
+    /// <param name="vaultToken">Token obtido no método ObterVaultTokenViaMutualTlsAsync</param>
+    public static async Task<string> ObterAzureTokenViaClientSecretAsync(string vaultToken)
+    {
+        // 2.1) Ler o client_secret no Vault
+        string clientSecret;
+        using (var httpClient = new HttpClient())
+        {
+            httpClient.BaseAddress = new Uri(vaultBaseUrl);
+            httpClient.DefaultRequestHeaders.Add("X-Vault-Token", vaultToken);
+
+            var response = await httpClient.GetAsync(secretPath);
+            if (!response.IsSuccessStatusCode)
+            {
+                string err = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Erro ao ler secret do Vault: {response.StatusCode}\n{err}");
+            }
+
+            string json = await response.Content.ReadAsStringAsync();
+            var obj = JObject.Parse(json);
+
+            // Ajuste o caminho no JSON caso KV v2 (data -> data -> client_secret)
+            clientSecret = obj["data"]?["data"]?["client_secret"]?.ToString();
+            if (string.IsNullOrEmpty(clientSecret))
+                throw new Exception($"Não encontrado campo 'client_secret' em:\n{json}");
+        }
+
+        // 2.2) Obter token do Azure AD via clientId + clientSecret (ADAL)
+        string authority = $"https://login.microsoftonline.com/{tenantId}";
+        var authContext = new AuthenticationContext(authority);
+
+        var cred = new ClientCredential(clientId, clientSecret);
+
+        AuthenticationResult result = await authContext.AcquireTokenAsync(resource, cred);
+        if (string.IsNullOrEmpty(result.AccessToken))
+            throw new Exception("Falha ao obter AccessToken do Azure AD.");
+
+        return result.AccessToken;
+    }
+}
