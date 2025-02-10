@@ -1,0 +1,57 @@
+
+
+
+using System;
+using System.Threading.Tasks;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // Como o Main não é assíncrono em .NET 4.5.2,
+        // chamamos um método async via GetAwaiter().GetResult()
+        try
+        {
+            MainAsync().GetAwaiter().GetResult();
+        }
+        catch(Exception ex)
+        {
+            Console.WriteLine("Erro geral: " + ex);
+        }
+        Console.WriteLine("\nPressione qualquer tecla para sair...");
+        Console.ReadKey();
+    }
+
+    static async Task MainAsync()
+    {
+        // 1) Obter token do Vault (via mTLS)
+        string vaultToken = await VaultAzureAutenticacao.ObterVaultTokenViaMutualTlsAsync();
+        Console.WriteLine("Vault Token: " + vaultToken);
+
+        // 2) Usar token do Vault para obter token do Azure (clientId+secret)
+        string azureToken = await VaultAzureAutenticacao.ObterAzureTokenViaClientSecretAsync(vaultToken);
+        Console.WriteLine("\nAzure Token: " + azureToken);
+
+        // Exemplo: Chamar Graph com esse token
+        string graphResponse = await ChamarGraphAsync(azureToken, "https://graph.microsoft.com/v1.0/users");
+        Console.WriteLine("\nResposta do Graph:");
+        Console.WriteLine(graphResponse);
+    }
+
+    private static async Task<string> ChamarGraphAsync(string bearerToken, string url)
+    {
+        using(var client = new System.Net.Http.HttpClient())
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearerToken);
+
+            var response = await client.GetAsync(url);
+            string content = await response.Content.ReadAsStringAsync();
+
+            if(response.IsSuccessStatusCode)
+                return content;
+            else
+                return $"Erro Graph: {response.StatusCode}\n{content}";
+        }
+    }
+}
