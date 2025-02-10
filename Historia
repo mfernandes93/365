@@ -1,0 +1,209 @@
+
+configurar projeto e instalar bibliotecas 
+
+1️⃣ System.Net.Http (Incluso no .NET Framework 4.5.2)
+📌 Por que foi usado?
+
+Permite enviar requisições HTTP à API usando HttpClient.
+Habilita a configuração do HttpClientHandler, que permite adicionar o certificado do cliente na requisição.
+Fundamental para enviar requisições seguras ao servidor e receber a resposta (incluindo o token).
+🔹 O que resolveu?
+✔ Possibilitou a comunicação segura com a API via HTTPS.
+✔ Garantiu que o certificado do cliente fosse enviado corretamente na autenticação mútua TLS.
+
+2️⃣ System.Security.Cryptography.X509Certificates (Incluso no .NET)
+📌 Por que foi usado?
+
+Responsável por carregar e gerenciar o certificado digital do cliente no formato PFX.
+Permite a aplicação incluir certificados X.509 na requisição, o que é essencial para a autenticação mútua TLS.
+🔹 O que resolveu?
+✔ Carregou o certificado necessário para autenticar a aplicação junto à API.
+✔ Garantiu que a comunicação fosse segura e confiável.
+
+3️⃣ ServicePointManager (Incluso no .NET)
+📌 Por que foi usado?
+
+Configurado para forçar o uso de TLS 1.2, garantindo compatibilidade com servidores modernos, já que versões antigas do .NET podem usar TLS 1.0 por padrão.
+Permite a validação do certificado do servidor quando necessário.
+🔹 O que resolveu?
+✔ Evitou falhas de conexão por protocolos de segurança desatualizados.
+✔ Garantiu que a aplicação usasse um protocolo seguro (TLS 1.2) para se comunicar com a API.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+implemetar autenticação
+
+1. Escolha do Modelo TradOps
+Por que TradOps?
+
+Esse modelo permite autenticar a aplicação diretamente via certificados sem precisar hospedar a aplicação dentro da AWS.
+Evita a necessidade de configurações adicionais na infraestrutura da AWS, tornando a implementação mais simples.
+Utiliza Mutual TLS (mTLS) para autenticação segura entre a aplicação cliente e a API, garantindo que apenas clientes autorizados possam se conectar.
+2. Obtenção dos Certificados
+Para configurar Mutual TLS, foi necessário obter três arquivos de certificados:
+
+certificado.pem → Contém o certificado público da aplicação (usado para autenticar a identidade da aplicação cliente).
+chave.pem → Contém a chave privada, essencial para a assinatura digital da comunicação.
+ca.pem → Certificado da Autoridade Certificadora (CA) responsável por validar a autenticidade do servidor.
+
+3. Conversão de PEM para PFX
+Por que converter certificado.pem e chave.pem para PFX (.pfx)?
+
+O formato PEM armazena os certificados e a chave privada em arquivos separados, mas o .NET Framework 4.5.2 não suporta diretamente a leitura de arquivos .pem para autenticação mútua TLS.
+O formato PFX (.pfx) combina o certificado público e a chave privada em um único arquivo, facilitando a manipulação no .NET.
+O PFX pode ser carregado diretamente no X509Certificate2, permitindo sua utilização no HttpClientHandler para autenticação segura.
+
+
+4. Como a Conversão de PEM para PFX Foi Feita
+A conversão foi realizada usando OpenSSL, pois o formato PFX (PKCS#12) suporta armazenamento de certificados e chaves privadas juntos.
+
+
+Comando OpenSSL para a Conversão
+openssl pkcs12 -export -out client_cert.pfx -inkey chave.pem -in certificado.pem -certfile ca.pem
+
+
+
+
+5. Carregamento do Certificado PFX na Aplicação
+Após a conversão, o arquivo client_cert.pfx foi carregado dentro da aplicação .NET usando X509Certificate2, para ser enviado nas requisições para a API.
+
+****************************************************************************************
+var clientCertificate = new X509Certificate2("client_cert.pfx", "senha_do_certificado");
+****************************************************************************************
+
+O que isso faz?
+Carrega o certificado combinado (público + chave privada) na aplicação.
+Permite que a requisição seja autenticada corretamente usando Mutual TLS.
+
+
+6. Configuração da Requisição com o Certificado
+Para que a aplicação pudesse se comunicar com a API, foi configurado um HttpClientHandler que incluía o certificado PFX:
+
+****************************************************************************************
+var handler = new HttpClientHandler();
+handler.ClientCertificates.Add(clientCertificate);
+****************************************************************************************
+
+Isso garantiu que todas as requisições HTTP enviadas para a API incluíssem automaticamente o certificado digital, autenticando a aplicação sem precisar de credenciais manuais (como client_id e client_secret).
+
+7. Envio da Requisição para Obter o Token
+Com o certificado PFX carregado, a aplicação enviou uma requisição HTTPS para a API TradOps:
+
+****************************************************************************************
+using (var client = new HttpClient(handler))
+{
+    var response = client.PostAsync("https://vault-tradops.dev.ops.aws.cloud.ihf/v1/auth/cert/login", null).Result;
+    string content = response.Content.ReadAsStringAsync().Result;
+}
+****************************************************************************************
+
+📌 Explicação:
+A API reconheceu o certificado do cliente e validou a identidade da aplicação.
+A resposta da API continha o token de acesso, necessário para autenticar chamadas futuras à Microsoft Graph API.
+
+
+
+
+
+
+
+1. Abertura de Chamado para Obtenção do Token Inicial
+Antes de qualquer configuração técnica, foi necessário abrir um chamado para solicitar um token de uso único.
+
+Por que esse chamado foi necessário?
+O sistema TradOps exige um primeiro passo de autenticação para liberar o acesso ao Vault TradOps, que armazena os certificados necessários para autenticação mútua TLS.
+Esse token inicial é essencial para desbloquear o certificado e a chave privada que seriam utilizados posteriormente na autenticação da aplicação.
+
+2. Uso do curl no Git Bash para Obter o Token Final
+Após receber o token de uso único, foi necessário usá-lo para desbloquear o token final que permitiria acessar os certificados.
+
+Esse processo foi realizado executando o seguinte comando no Git Bash:
+
+---------- curl -skX POST https://vault-tradops.dev.ops.aws.cloud.ihf/v1/sys/wrapping/unwrap ---------
+
+Resultado: Esse comando retornou um token em texto, que seria utilizado para recuperar os arquivos de certificado.
+
+3. Conversão do Certificado para o Formato .pem
+Com o token final em mãos, foi possível acessar os arquivos do certificado no Vault TradOps, obtendo três arquivos no formato PEM:
+
+certificado.pem → Certificado público do cliente.
+chave.pem → Chave privada associada ao certificado.
+ca.pem → Certificado da Autoridade Certificadora (CA).
+Esses arquivos são necessários para a autenticação mútua TLS, mas, no .NET Framework 4.5.2, não é possível utilizar arquivos PEM diretamente.
+
+Por isso, foi necessário converter o certificado e a chave privada para o formato PFX.
+
+4. Conversão de PEM para PFX
+A conversão foi feita usando OpenSSL, pois o formato PFX (PKCS#12) suporta o armazenamento do certificado e da chave privada em um único arquivo.
+
+Comando para Converter PEM → PFX
+
+------------- openssl pkcs12 -export -out client_cert.pfx -inkey chave.pem -in certificado.pem -certfile ca.pem  ------------
+
+Resultado: Agora a aplicação possui o arquivo client_cert.pfx, que pode ser carregado diretamente no .NET para realizar a autenticação.
+
+5. Carregamento do Certificado na Aplicação
+Com o arquivo PFX pronto, o próximo passo foi carregar o certificado dentro da aplicação.
+
+---------- var clientCertificate = new X509Certificate2("client_cert.pfx", "senha_do_certificado"); -------------
+
+Carrega o certificado PFX na aplicação, garantindo que o cliente possa se autenticar na API TradOps.
+
+6. Configuração do HttpClientHandler para Autenticação Mútua TLS
+Para que o certificado fosse enviado automaticamente nas requisições para a API TradOps, foi configurado um HttpClientHandler:
+------------
+var handler = new HttpClientHandler();
+handler.ClientCertificates.Add(clientCertificate);
+------------
+Isso garantiu que o certificado fosse incluído automaticamente nas requisições para autenticação.
+
+7. Envio da Requisição para Obter o Token
+Com o certificado PFX carregado e o HttpClientHandler configurado, foi possível enviar uma requisição para a API TradOps e obter o token final de autenticação:
+-------------------------
+using (var client = new HttpClient(handler))
+{
+    var response = client.PostAsync("https://vault-tradops.dev.ops.aws.cloud.ihf/v1/auth/cert/login", null).Result;
+    string content = response.Content.ReadAsStringAsync().Result;
+   
+}
+------------------------
+O servidor reconheceu o certificado do cliente e retornou o token de acesso, que pode ser usado para acessar a Microsoft Graph API e outras integrações.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
