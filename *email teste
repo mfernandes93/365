@@ -1,0 +1,100 @@
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+
+public static class SimpleEmailTest
+{
+    /// <summary>
+    /// Exemplo simples: Ler 3 e-mails da caixa de entrada, imprimir assunto e data.
+    /// Os valores (token, userId) estão fixos localmente.
+    /// </summary>
+    public static async Task TestarLeituraEmailsAsync()
+    {
+        // 1) Ajuste seu token e o usuário
+        string accessToken = "<SEU_ACCESS_TOKEN>";
+        string userId = "usuario@seudominio.com"; // pode ser GUID também
+
+        // 2) Montar a URL para pegar os últimos 3 emails da Inbox
+        // Seleciona "id,subject,receivedDateTime"
+        // Ordena por data desc
+        string endpoint = $"https://graph.microsoft.com/v1.0/users/{userId}/mailFolders/Inbox/messages" +
+                         "?$top=3" +
+                         "&$select=id,subject,receivedDateTime" +
+                         "&$orderby=receivedDateTime desc";
+
+        using (var httpClient = new HttpClient())
+        {
+            // Adicionar o token Bearer
+            httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", accessToken);
+
+            // Chamar o endpoint
+            var response = await httpClient.GetAsync(endpoint);
+            string json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"Falha ao ler emails. Status: {response.StatusCode}");
+                Console.WriteLine(json);
+                return;
+            }
+
+            // Parse do JSON (usando Newtonsoft.Json)
+            var obj = JObject.Parse(json);
+            var messages = (JArray)obj["value"];
+
+            if (messages == null || messages.Count == 0)
+            {
+                Console.WriteLine("Nenhum e-mail encontrado na caixa de entrada.");
+                return;
+            }
+
+            // Imprimir um resumo de cada email
+            foreach (var msg in messages)
+            {
+                string id = msg["id"]?.ToString();
+                string subject = msg["subject"]?.ToString();
+                string receivedDate = msg["receivedDateTime"]?.ToString();
+
+                Console.WriteLine($"Email ID: {id}");
+                Console.WriteLine($"   Assunto: {subject}");
+                Console.WriteLine($"   Recebido: {receivedDate}");
+                Console.WriteLine("-------------------------------");
+            }
+        }
+    }
+}
+Como chamar o método
+No seu Main (se estiver em .NET 4.5.2 sem async Main):
+
+csharp
+Copiar
+Editar
+static void Main(string[] args)
+{
+    // Se precisar TLS 1.2 em .NET 4.5.2:
+    System.Net.ServicePointManager.SecurityProtocol = 
+        System.Net.SecurityProtocolType.Tls12 
+        | System.Net.SecurityProtocolType.Tls11 
+        | System.Net.SecurityProtocolType.Tls;
+
+    try
+    {
+        // Chama o método assíncrono
+        MainAsync().GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Erro: {ex.Message}");
+    }
+    
+    Console.WriteLine("Pressione qualquer tecla para sair...");
+    Console.ReadKey();
+}
+
+static async Task MainAsync()
+{
+    await SimpleEmailTest.TestarLeituraEmailsAsync();
+}
