@@ -1,0 +1,113 @@
+2. Método de teste (TestarLeituraEmailsAsync) que recebe Token e UserId
+csharp
+Copiar
+Editar
+using System;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+
+public static class SimpleEmailTest
+{
+    /// <summary>
+    /// Método de teste: lista 3 e-mails da Inbox de um usuário.
+    /// Recebe o token e o userId como parâmetros.
+    /// </summary>
+    public static async Task TestarLeituraEmailsAsync(string accessToken, string userId)
+    {
+        // Montar a URL para pegar os últimos 3 emails da Inbox
+        string endpoint = $"https://graph.microsoft.com/v1.0/users/{userId}/mailFolders/Inbox/messages" +
+                         "?$top=3" +
+                         "&$select=id,subject,receivedDateTime" +
+                         "&$orderby=receivedDateTime desc";
+
+        using (var httpClient = new HttpClient())
+        {
+            // Adicionar o token Bearer
+            httpClient.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", accessToken);
+
+            // Chama o endpoint
+            var response = await httpClient.GetAsync(endpoint);
+            string json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"Falha ao ler emails. Status: {response.StatusCode}");
+                Console.WriteLine(json);
+                return;
+            }
+
+            // Parse do JSON (usando Newtonsoft.Json)
+            var obj = JObject.Parse(json);
+            var messages = (JArray)obj["value"];
+
+            if (messages == null || messages.Count == 0)
+            {
+                Console.WriteLine("Nenhum e-mail encontrado na caixa de entrada.");
+                return;
+            }
+
+            // Imprimir um resumo de cada email
+            foreach (var msg in messages)
+            {
+                string id = msg["id"]?.ToString();
+                string subject = msg["subject"]?.ToString();
+                string receivedDate = msg["receivedDateTime"]?.ToString();
+
+                Console.WriteLine($"Email ID: {id}");
+                Console.WriteLine($"   Assunto: {subject}");
+                Console.WriteLine($"   Recebido: {receivedDate}");
+                Console.WriteLine("-------------------------------");
+            }
+        }
+    }
+}
+Observe que agora ele não está “hard-coded” com "<SEU_ACCESS_TOKEN>"; em vez disso, recebe accessToken e userId como parâmetros.
+
+3. Chamar esses métodos no MainAsync
+No seu Program.cs, você pode fazer assim:
+
+csharp
+Copiar
+Editar
+using System;
+using System.Threading.Tasks;
+
+class Program
+{
+    static void Main(string[] args)
+    {
+        // Em .NET 4.5.2, chame o método assíncrono via .GetAwaiter().GetResult():
+        MainAsync().GetAwaiter().GetResult();
+
+        Console.WriteLine("Pressione qualquer tecla para sair...");
+        Console.ReadKey();
+    }
+
+    static async Task MainAsync()
+    {
+        // (Opcional) Forçar TLS 1.2 caso seja .NET 4.5.2
+        System.Net.ServicePointManager.SecurityProtocol = 
+            System.Net.SecurityProtocolType.Tls12 |
+            System.Net.SecurityProtocolType.Tls11 |
+            System.Net.SecurityProtocolType.Tls;
+
+        try
+        {
+            // 1) Obter Token (exemplo simples, pode ser seu método Vault)
+            string azureToken = await AzureAuthExample.ObterAzureTokenAsync();
+
+            // 2) Definir o userId (mailbox) que deseja acessar
+            string userId = "usuario@seudominio.com";
+
+            // 3) Chamar o método de teste, passando o token e o userId
+            await SimpleEmailTest.TestarLeituraEmailsAsync(azureToken, userId);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Erro: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+}
