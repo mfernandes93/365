@@ -1,0 +1,190 @@
+using System;
+using System.IO;
+using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
+using Newtonsoft.Json.Linq;
+
+public static class EmailAttachmentDownloader
+{
+    /// <summary>
+    /// Lê e-mails de uma mailbox específica via Graph, filtra e baixa anexos que
+    /// contenham uma determinada substring no nome, salvando em pasta local.
+    /// Todos os valores (token, userId, pasta, etc.) são definidos localmente.
+    /// </summary>
+    public static async Task BaixarAnexosAsync()
+    {
+        // -----------------------------------------------------
+        // [1] Defina as variáveis localmente
+        // -----------------------------------------------------
+
+        // Token Bearer do Azure AD (App-Only com Mail.Read)
+        // Exemplo de token fixo, ou pego de alguma variável no seu código.
+        string accessToken = "<SEU_ACCESS_TOKEN_AQUI>";
+
+        // Endereço do usuário (mailbox) para ler: "fulano@seudominio.com"
+        string userId = "fulano@seudominio.com";
+
+        // Substring que queremos no nome do anexo
+        string searchStringInAttachmentName = "CONTRATO";
+
+        // Pasta local onde vamos salvar
+        string saveFolder = @"C:\Anexos";
+
+        // Se quiser garantir a existência da pasta:
+        if (!Directory.Exists(saveFolder))
+            Directory.CreateDirectory(saveFolder);
+
+        // -----------------------------------------------------
+        // [2] Montar a URL para buscar mensagens
+        // -----------------------------------------------------
+        // Exemplo: pega as últimas 10 mensagens da Inbox
+        // Seleciona apenas id, subject, hasAttachments, e filtra hasAttachments eq true
+        // Ordena pela data de recebimento desc
+
+        string endpointMessages =
+            $"https://graph.microsoft.com/v1.0/users/{userId}/mailFolders/Inbox/messages" +
+            "?$top=10" +
+            "&$select=id,subject,hasAttachments,receivedDateTime" +
+            "&$orderby=receivedDateTime desc" +
+            "&$filter=hasAttachments eq true";
+
+        // -----------------------------------------------------
+        // [3] Consumir a API Graph para obter as mensagens
+        // -----------------------------------------------------
+        using (var client = new HttpClient())
+        {
+            // Autenticação via Bearer Token
+            client.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", accessToken);
+
+            // Faz GET na rota das mensagens
+            var response = await client.GetAsync(endpointMessages);
+            var json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception($"Falha ao listar mensagens. Status: {response.StatusCode}\n{json}");
+            }
+
+            var obj = JObject.Parse(json);
+            var messagesArray = (JArray)obj["value"];
+            if (messagesArray == null || messagesArray.Count == 0)
+            {
+                Console.WriteLine("Nenhuma mensagem encontrada com anexos.");
+                return;
+            }
+
+            // -----------------------------------------------------
+            // [4] Iterar sobre cada mensagem e buscar anexos
+            // -----------------------------------------------------
+            foreach (var msg in messagesArray)
+            {
+                string messageId = msg["id"]?.ToString();
+                string subject = msg["subject"]?.ToString();
+                bool hasAttachments = (bool?)msg["hasAttachments"] == true;
+
+                Console.WriteLine($"Mensagem: {subject}, ID={messageId}, HasAttach={hasAttachments}");
+
+                // Se não tem anexo, pula
+                if (!hasAttachments) 
+                    continue;
+
+                // Monta URL para lista de anexos da mensagem
+                string endpointAttachments =
+                    $"https://graph.microsoft.com/v1.0/users/{userId}/messages/{messageId}/attachments";
+
+                var attachResponse = await client.GetAsync(endpointAttachments);
+                string attachJson = await attachResponse.Content.ReadAsStringAsync();
+
+                if (!attachResponse.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"Falha ao obter anexos (Status: {attachResponse.StatusCode})\n{attachJson}");
+                    continue;
+                }
+
+                var attachObj = JObject.Parse(attachJson);
+                var attachArray = (JArray)attachObj["value"];
+
+                if (attachArray == null || attachArray.Count == 0)
+                {
+                    Console.WriteLine("Sem anexos nessa mensagem.");
+                    continue;
+                }
+
+                // -----------------------------------------------------
+                // [5] Baixar somente anexos cujo nome contenha a substring
+                // -----------------------------------------------------
+                foreach (var att in attachArray)
+                {
+                    // Verifica se é um fileAttachment
+                    string odataType = att["@odata.type"]?.ToString();
+                    if (odataType != "#microsoft.graph.fileAttachment")
+                    {
+                        // Se for itemAttachment (ex.: outro e-mail, calendar, etc.), pula
+                        continue;
+                    }
+
+                    string attachmentName = att["name"]?.ToString() ?? "semNome";
+                    string contentBytes = att["contentBytes"]?.ToString(); // base64
+
+                    Console.WriteLine($"   Anexo encontrado: {attachmentName}");
+
+                    // Checa se o nome contém a substring procurada
+                    if (!attachmentName.ToLower().Contains(searchStringInAttachmentName.ToLower()))
+                    {
+                        Console.WriteLine($"   -> Nome não contém '{searchStringInAttachmentName}'. Pulando...");
+                        continue;
+                    }
+
+                    // Se tiver conteúdo base64, salva
+                    if (!string.IsNullOrEmpty(contentBytes))
+                    {
+                        byte[] fileData = Convert.FromBase64String(contentBytes);
+
+                        // Substitui caracteres que possam gerar erro no nome do arquivo
+                        string safeFileName = attachmentName
+                            .Replace(":", "_")
+                            .Replace("\\", "_")
+                            .Replace("/", "_");
+
+                        string filePath = Path.Combine(saveFolder, safeFileName);
+
+                        File.WriteAllBytes(filePath, fileData);
+                        Console.WriteLine($"   -> Anexo salvo em: {filePath}");
+                    }
+                    else
+                    {
+                        Console.WriteLine("   -> contentBytes vazio. Não foi possível baixar.");
+                    }
+                }
+            }
+        }
+    }
+}
+Como chamar esse método
+Em um Main (ou outro ponto do seu código), faça:
+
+csharp
+Copiar
+Editar
+static void Main(string[] args)
+{
+    // Em .NET 4.5.2, chame com .GetAwaiter().GetResult():
+    try
+    {
+        MainAsync().GetAwaiter().GetResult();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("Erro: " + ex.Message);
+    }
+
+    Console.WriteLine("\nPressione qualquer tecla para sair...");
+    Console.ReadKey();
+}
+
+static async Task MainAsync()
+{
+    await EmailAttachmentDownloader.BaixarAnexosAsync();
+}
