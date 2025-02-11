@@ -1,0 +1,38 @@
+using Microsoft.Graph;
+using Microsoft.Identity.Client;
+using System;
+using System.Net.Http.Headers;
+using System.Threading.Tasks;
+
+public class GraphService
+{
+    private readonly string clientId = "SEU_CLIENT_ID";
+    private readonly string tenantId = "SEU_TENANT_ID";
+    private readonly string clientSecret = "SEU_CLIENT_SECRET";
+    private readonly string[] scopes = { "https://graph.microsoft.com/.default" };
+
+    public async Task<GraphServiceClient> CriarGraphClientAsync()
+    {
+        return new GraphServiceClient(new CustomAuthProvider());
+    }
+
+    private class CustomAuthProvider : IAuthenticationProvider
+    {
+        public async Task AuthenticateRequestAsync(HttpRequestMessage request)
+        {
+            string token = await ObterTokenDeAcessoAsync();
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        }
+
+        private async Task<string> ObterTokenDeAcessoAsync()
+        {
+            var app = ConfidentialClientApplicationBuilder.Create("SEU_CLIENT_ID")
+                .WithClientSecret("SEU_CLIENT_SECRET")
+                .WithAuthority($"https://login.microsoftonline.com/SEU_TENANT_ID")
+                .Build();
+
+            AuthenticationResult result = await app.AcquireTokenForClient(new string[] { "https://graph.microsoft.com/.default" }).ExecuteAsync();
+            return result.AccessToken;
+        }
+    }
+}
