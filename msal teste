@@ -58,3 +58,27 @@ public class GraphConnectorMSAL
         }
     }
 }
+
+
+
+
+
+
+
+using System;
+using System.Threading.Tasks;
+
+class Program
+{
+    static async Task Main(string[] args)
+    {
+        // Cria a instância do conector
+        GraphConnectorMSAL graphConnector = new GraphConnectorMSAL();
+        
+        // Chama o método que efetua a requisição à API do Graph
+        await graphConnector.ChamarGraphApiAsync();
+        
+        Console.WriteLine("Pressione qualquer tecla para sair...");
+        Console.ReadKey();
+    }
+}
