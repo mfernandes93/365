@@ -1,0 +1,46 @@
+using System;
+using System.Text;
+
+public class JwtDecoder
+{
+    public static void Main()
+    {
+        string jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzY3AiOiJNYWlsLlJlYWQiLCJzdWIiOiIxMjM0NTYiLCJleHAiOjE2NzQwNDg4OTZ9.WZ86R0X2z8kRoZf...";
+        
+        // Divide em 3 partes: header, payload, signature
+        var parts = jwt.Split('.');
+        if (parts.Length < 2)
+        {
+            Console.WriteLine("JWT inválido!");
+            return;
+        }
+
+        string header = parts[0];
+        string payload = parts[1];
+
+        // Converte Base64URL -> Base64
+        string headerJson = DecodeBase64Url(header);
+        string payloadJson = DecodeBase64Url(payload);
+
+        Console.WriteLine("Header: " + headerJson);
+        Console.WriteLine("Payload: " + payloadJson);
+    }
+
+    private static string DecodeBase64Url(string base64Url)
+    {
+        // 1. Substitui caracteres URL-safe
+        string base64 = base64Url.Replace('-', '+').Replace('_', '/');
+
+        // 2. Ajusta padding
+        switch (base64.Length % 4)
+        {
+            case 2: base64 += "=="; break;
+            case 3: base64 += "="; break;
+            case 1: base64 += "==="; break;
+        }
+
+        // 3. Decodifica bytes e converte para string
+        var bytes = Convert.FromBase64String(base64);
+        return Encoding.UTF8.GetString(bytes);
+    }
+}
