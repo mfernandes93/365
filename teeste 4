@@ -33,6 +33,29 @@ public class GraphService
 
             AuthenticationResult result = await app.AcquireTokenForClient(new string[] { "https://graph.microsoft.com/.default" }).ExecuteAsync();
             return result.AccessToken;
+
+
+
+
+
+
+ try
+        {
+            // Criar instância do serviço GraphService
+            GraphService graphService = new GraphService();
+            
+            // Obter o GraphServiceClient autenticado
+            GraphServiceClient graphClient = await graphService.CriarGraphClientAsync();
+
+            // Chamar a API para obter o usuário autenticado
+            var usuario = await graphClient.Me.Request().GetAsync();
+            
+            Console.WriteLine($"Usuário autenticado: {usuario.DisplayName}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Erro ao chamar o Microsoft Graph: {ex.Message}");
+        }
         }
     }
 }
