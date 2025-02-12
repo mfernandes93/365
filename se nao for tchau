@@ -1,0 +1,48 @@
+using System;
+using System.Threading.Tasks;
+using Microsoft.Identity.Client;
+using Microsoft.Graph;
+using System.Net.Http.Headers;
+
+namespace GraphApiConsoleApp
+{
+    class Program
+    {
+        // Configure os valores abaixo com as informações do seu registro de aplicativo no Azure AD
+        private const string clientId = "SEU_CLIENT_ID";
+        private const string tenantId = "SEU_TENANT_ID"; // pode ser "common" ou o ID do seu tenant
+
+        // Escopo que será solicitado (neste exemplo, permissão para ler informações do usuário)
+        private static readonly string[] scopes = new string[] { "User.Read" };
+
+        static async Task Main(string[] args)
+        {
+            // Cria a aplicação pública MSAL configurada com o clientId e tenantId
+            var app = PublicClientApplicationBuilder.Create(clientId)
+                .WithAuthority(AzureCloudInstance.AzurePublic, tenantId)
+                .WithDefaultRedirectUri()
+                .Build();
+
+            // Solicita o token via fluxo de device code (para uso em apps console)
+            var authResult = await app.AcquireTokenWithDeviceCode(scopes, deviceCodeResult =>
+            {
+                // Exibe a mensagem com instruções para o usuário autenticar no navegador
+                Console.WriteLine(deviceCodeResult.Message);
+                return Task.CompletedTask;
+            }).ExecuteAsync();
+
+            // Cria o cliente do Microsoft Graph, injetando o token de acesso na autorização das requisições
+            var graphClient = new GraphServiceClient(new DelegateAuthenticationProvider(
+                async (requestMessage) =>
+                {
+                    requestMessage.Headers.Authorization =
+                        new AuthenticationHeaderValue("Bearer", authResult.AccessToken);
+                    await Task.CompletedTask;
+                }));
+
+            // Exemplo: recupera as informações do usuário logado
+            var me = await graphClient.Me.Request().GetAsync();
+            Console.WriteLine($"Nome: {me.DisplayName}");
+        }
+    }
+}
