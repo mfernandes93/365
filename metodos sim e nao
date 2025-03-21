@@ -1,0 +1,11 @@
+string[] permitidos = permitStr?.Split(',', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
+string[] naoPermitidos = naoPermitStr?.Split(',', StringSplitOptions.RemoveEmptyEntries) ?? Array.Empty<string>();
+
+if (permitidos.Length > 0)
+{
+    if (Array.IndexOf(permitidos, metid) < 0 || Array.IndexOf(naoPermitidos, metid) >= 0) executar = false;
+}
+else
+{
+    if (Array.IndexOf(naoPermitidos, metid) >= 0) executar = false;
+}
